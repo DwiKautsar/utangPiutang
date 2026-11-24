@@ -1,6 +1,6 @@
 import { handle } from 'hono/vercel';
 import { createClient } from '@libsql/client/web';
-import { createApp } from '../server/app';
+import { createApp } from '../server/app.js';
 
 const rawUrl = process.env.TURSO_DATABASE_URL?.trim();
 const authToken = process.env.TURSO_AUTH_TOKEN?.trim();

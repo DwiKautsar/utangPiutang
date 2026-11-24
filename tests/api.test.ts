@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createApp } from '../server/app';
-import { createDatabase } from '../server/db';
+import { createApp } from '../server/app.js';
+import { createDatabase } from '../server/db.js';
 
 function extractCookie(res: Response): string {
   const raw = res.headers.get('set-cookie') || '';

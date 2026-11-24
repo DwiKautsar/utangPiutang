@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { createDatabase } from './db';
-import { createApp } from './app';
+import { createDatabase } from './db.js';
+import { createApp } from './app.js';
 
 const port = Number(process.env.PORT || 3001);
 const db = createDatabase();

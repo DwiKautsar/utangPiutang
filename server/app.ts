@@ -1,10 +1,10 @@
 import type { Client } from '@libsql/client';
 import { Hono } from 'hono';
-import { ensureDatabaseReady } from './schema';
-import { csrfGuard, securityHeaders } from './security';
-import { createAuthRoutes, getAuthenticatedUser, type AuthEnv } from './routes/auth';
-import { createUsersRoutes } from './routes/users';
-import { createDebtsRoutes } from './routes/debts';
+import { ensureDatabaseReady } from './schema.js';
+import { csrfGuard, securityHeaders } from './security.js';
+import { createAuthRoutes, getAuthenticatedUser, type AuthEnv } from './routes/auth.js';
+import { createUsersRoutes } from './routes/users.js';
+import { createDebtsRoutes } from './routes/debts.js';
 
 export interface AppOptions {
   db: Client;

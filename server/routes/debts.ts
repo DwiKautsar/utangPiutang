@@ -1,8 +1,8 @@
 import type { Client, Row } from '@libsql/client';
 import { Hono } from 'hono';
-import type { DebtRecord, DebtStatus } from '../db';
-import { validateCreateDebtsInput, validatePaymentNote } from '../validators';
-import type { AuthEnv } from './auth';
+import type { DebtRecord, DebtStatus } from '../db.js';
+import { validateCreateDebtsInput, validatePaymentNote } from '../validators.js';
+import type { AuthEnv } from './auth.js';
 
 function mapDebtRow(row: Row): DebtRecord {
   return {

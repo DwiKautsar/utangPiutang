@@ -1,6 +1,6 @@
 import type { Client } from '@libsql/client';
 import { Hono } from 'hono';
-import type { PublicUser } from '../db';
+import type { PublicUser } from '../db.js';
 import {
   buildSessionCookie,
   clearSessionCookie,
@@ -12,8 +12,8 @@ import {
   SESSION_COOKIE_NAME,
   SESSION_TTL_DAYS,
   verifyPassword
-} from '../security';
-import { validateLoginInput, validateRegisterInput } from '../validators';
+} from '../security.js';
+import { validateLoginInput, validateRegisterInput } from '../validators.js';
 
 export interface AuthEnv {
   Variables: {
