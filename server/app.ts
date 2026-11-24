@@ -1,35 +1,40 @@
-import fs from 'node:fs';
-import path from 'node:path';
+import type { Client } from '@libsql/client';
 import { Hono } from 'hono';
-import { serveStatic } from '@hono/node-server/serve-static';
-import { createDatabase, ensureDatabaseReady } from './db.ts';
-import { csrfGuard, securityHeaders } from './security.ts';
-import { createAuthRoutes, getAuthenticatedUser, type AuthEnv } from './routes/auth.ts';
-import { createUsersRoutes } from './routes/users.ts';
-import { createDebtsRoutes } from './routes/debts.ts';
+import { ensureDatabaseReady } from './schema';
+import { csrfGuard, securityHeaders } from './security';
+import { createAuthRoutes, getAuthenticatedUser, type AuthEnv } from './routes/auth';
+import { createUsersRoutes } from './routes/users';
+import { createDebtsRoutes } from './routes/debts';
 
 export interface AppOptions {
-  dbUrl?: string;
-  dbAuthToken?: string;
+  db: Client;
   enableRateLimit?: boolean;
-  serveDist?: boolean;
+  configError?: string;
 }
 
-export function createApp(options: AppOptions = {}) {
-  const db = createDatabase({
-    url: options.dbUrl,
-    authToken: options.dbAuthToken
-  });
+export function createApp(options: AppOptions) {
+  const { db, configError } = options;
   const app = new Hono<AuthEnv>();
 
   app.use('*', securityHeaders);
   app.use('/api/*', csrfGuard);
-  app.use('/api/*', async (_c, next) => {
+
+  app.get('/api/health', (c) =>
+    c.json({
+      status: configError ? 'misconfigured' : 'ok',
+      error: configError ?? null
+    })
+  );
+
+  app.use('/api/*', async (c, next) => {
+    if (c.req.path === '/api/health') return next();
+    if (configError) {
+      return c.json({ error: configError }, 500);
+    }
     await ensureDatabaseReady(db);
     return next();
   });
 
-  app.get('/api/health', (c) => c.json({ status: 'ok' }));
   app.route('/api/auth', createAuthRoutes(db, options.enableRateLimit ?? true));
 
   const requireAuth = async (
@@ -55,20 +60,6 @@ export function createApp(options: AppOptions = {}) {
   app.onError((_err, c) => {
     return c.json({ error: 'Terjadi gangguan pada server. Coba beberapa saat lagi.' }, 500);
   });
-
-  if (options.serveDist) {
-    const distDir = path.resolve(process.cwd(), 'dist');
-    if (fs.existsSync(distDir)) {
-      app.use('/assets/*', serveStatic({ root: './dist' }));
-      app.get('*', (c) => {
-        if (c.req.path.startsWith('/api/')) {
-          return c.json({ error: 'Endpoint tidak ditemukan.' }, 404);
-        }
-        const indexHtml = fs.readFileSync(path.join(distDir, 'index.html'), 'utf-8');
-        return c.html(indexHtml);
-      });
-    }
-  }
 
   return { app, db };
 }

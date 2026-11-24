@@ -1,6 +1,6 @@
 import type { Client } from '@libsql/client';
 import { Hono } from 'hono';
-import type { PublicUser } from '../db.ts';
+import type { PublicUser } from '../db';
 import {
   buildSessionCookie,
   clearSessionCookie,
@@ -12,8 +12,8 @@ import {
   SESSION_COOKIE_NAME,
   SESSION_TTL_DAYS,
   verifyPassword
-} from '../security.ts';
-import { validateLoginInput, validateRegisterInput } from '../validators.ts';
+} from '../security';
+import { validateLoginInput, validateRegisterInput } from '../validators';
 
 export interface AuthEnv {
   Variables: {

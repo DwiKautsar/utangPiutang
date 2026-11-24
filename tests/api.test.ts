@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createApp } from '../server/app.ts';
+import { createApp } from '../server/app';
+import { createDatabase } from '../server/db';
 
 function extractCookie(res: Response): string {
   const raw = res.headers.get('set-cookie') || '';
@@ -36,7 +37,8 @@ async function jsonRequest(
 }
 
 test('Alur lengkap: auth, sinkronisasi piutang multi-user, BOLA/IDOR, CSRF, dan pelunasan 2 arah', async () => {
-  const { app, db } = createApp({ dbUrl: ':memory:', enableRateLimit: false });
+  const db = createDatabase({ url: ':memory:' });
+  const { app } = createApp({ db, enableRateLimit: false });
 
   try {
     // 1. CSRF guard menolak mutasi tanpa header X-Requested-With

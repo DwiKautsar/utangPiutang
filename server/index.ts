@@ -1,8 +1,25 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { serve } from '@hono/node-server';
-import { createApp } from './app.ts';
+import { serveStatic } from '@hono/node-server/serve-static';
+import { createDatabase } from './db';
+import { createApp } from './app';
 
 const port = Number(process.env.PORT || 3001);
-const { app } = createApp({ serveDist: true });
+const db = createDatabase();
+const { app } = createApp({ db });
+
+const distDir = path.resolve(process.cwd(), 'dist');
+if (fs.existsSync(distDir)) {
+  app.use('/assets/*', serveStatic({ root: './dist' }));
+  app.get('*', (c) => {
+    if (c.req.path.startsWith('/api/')) {
+      return c.json({ error: 'Endpoint tidak ditemukan.' }, 404);
+    }
+    const indexHtml = fs.readFileSync(path.join(distDir, 'index.html'), 'utf-8');
+    return c.html(indexHtml);
+  });
+}
 
 serve(
   {

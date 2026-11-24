@@ -1,6 +1,6 @@
 import type { Client } from '@libsql/client';
 import { Hono } from 'hono';
-import type { AuthEnv } from './auth.ts';
+import type { AuthEnv } from './auth';
 
 export function createUsersRoutes(db: Client) {
   const router = new Hono<AuthEnv>();
