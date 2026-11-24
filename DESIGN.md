@@ -25,7 +25,7 @@ Dial: ENERGY 2 / RHYTHM 2 / MOTION 1
 - `--status-pending`: `#8A4B08` dengan latar `#FEF3C7` (status menunggu konfirmasi)
 - `--border-ledger`: `#D6CEC2`
 
-### Mode Gelap (Warm Charcoal & Paper - Toggle R-21/R-34)
+### Mode Gelap (Warm Charcoal & Paper - Default atas permintaan pemilik produk, toggle R-21/R-34 tetap aktif)
 - `--bg-canvas`: `#181615`
 - `--bg-surface`: `#221F1D`
 - `--bg-elevated`: `#2B2724`

@@ -191,3 +191,97 @@ test('Alur lengkap: auth, sinkronisasi piutang multi-user, BOLA/IDOR, CSRF, dan 
     db.close();
   }
 });
+
+test('RBAC Admin: proteksi 403 user biasa, kelola akun, reset password, dan moderasi utang piutang', async () => {
+  const db = createDatabase({ url: ':memory:' });
+  const { app } = createApp({ db, enableRateLimit: false });
+
+  try {
+    // User pertama otomatis jadi admin
+    const regAdmin = await jsonRequest(app, '/api/auth/register', {
+      method: 'POST',
+      body: { username: 'owner', displayName: 'Owner Kas', password: 'password123' }
+    });
+    assert.equal(regAdmin.status, 201);
+    const adminCookie = extractCookie(regAdmin);
+    const adminUser = ((await regAdmin.json()) as { user: { id: number; role: string } }).user;
+    assert.equal(adminUser.role, 'admin');
+
+    // User kedua otomatis jadi user biasa
+    const regUser = await jsonRequest(app, '/api/auth/register', {
+      method: 'POST',
+      body: { username: 'member', displayName: 'Member Satu', password: 'password123' }
+    });
+    assert.equal(regUser.status, 201);
+    const userCookie = extractCookie(regUser);
+    const normalUser = ((await regUser.json()) as { user: { id: number; role: string } }).user;
+    assert.equal(normalUser.role, 'user');
+
+    // User biasa ditolak (403) mengakses endpoint admin
+    const forbiddenOverview = await jsonRequest(app, '/api/admin/overview', { cookie: userCookie });
+    assert.equal(forbiddenOverview.status, 403);
+
+    const forbiddenDelete = await jsonRequest(app, `/api/admin/users/${adminUser.id}`, {
+      method: 'DELETE',
+      cookie: userCookie
+    });
+    assert.equal(forbiddenDelete.status, 403);
+
+    // Admin tidak boleh menurunkan role atau menghapus akun sendiri
+    const selfDemote = await jsonRequest(app, `/api/admin/users/${adminUser.id}/role`, {
+      method: 'PATCH',
+      cookie: adminCookie,
+      body: { role: 'user' }
+    });
+    assert.equal(selfDemote.status, 400);
+
+    const selfDelete = await jsonRequest(app, `/api/admin/users/${adminUser.id}`, {
+      method: 'DELETE',
+      cookie: adminCookie
+    });
+    assert.equal(selfDelete.status, 400);
+
+    // Buat catatan piutang lalu admin ubah status & hapus
+    const debtRes = await jsonRequest(app, '/api/debts', {
+      method: 'POST',
+      cookie: adminCookie,
+      body: {
+        items: [{ debtorId: normalUser.id, amountIdr: 25000, description: 'Uji moderasi admin' }]
+      }
+    });
+    const debtId = ((await debtRes.json()) as { items: Array<{ id: number }> }).items[0].id;
+
+    const statusUpdate = await jsonRequest(app, `/api/admin/debts/${debtId}/status`, {
+      method: 'PATCH',
+      cookie: adminCookie,
+      body: { status: 'paid' }
+    });
+    assert.equal(statusUpdate.status, 200);
+
+    const delDebt = await jsonRequest(app, `/api/admin/debts/${debtId}`, {
+      method: 'DELETE',
+      cookie: adminCookie
+    });
+    assert.equal(delDebt.status, 200);
+
+    // Admin reset password user -> sesi lama user otomatis gugur
+    const resetRes = await jsonRequest(app, `/api/admin/users/${normalUser.id}/reset-password`, {
+      method: 'PATCH',
+      cookie: adminCookie,
+      body: { newPassword: 'newpassword123' }
+    });
+    assert.equal(resetRes.status, 200);
+
+    const oldSessionCheck = await jsonRequest(app, '/api/debts', { cookie: userCookie });
+    assert.equal(oldSessionCheck.status, 401);
+
+    // Admin hapus akun member
+    const delUser = await jsonRequest(app, `/api/admin/users/${normalUser.id}`, {
+      method: 'DELETE',
+      cookie: adminCookie
+    });
+    assert.equal(delUser.status, 200);
+  } finally {
+    db.close();
+  }
+});

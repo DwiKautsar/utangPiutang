@@ -1,6 +1,6 @@
 import type { Client } from '@libsql/client';
 import { Hono } from 'hono';
-import type { PublicUser } from '../db.js';
+import type { PublicUser, UserRole } from '../db.js';
 import {
   buildSessionCookie,
   clearSessionCookie,
@@ -21,6 +21,11 @@ export interface AuthEnv {
   };
 }
 
+function getConfiguredAdminUsername(): string | null {
+  const val = process.env.ADMIN_USERNAME?.trim().toLowerCase();
+  return val || null;
+}
+
 export async function getAuthenticatedUser(
   db: Client,
   cookieHeader: string | undefined
@@ -30,7 +35,7 @@ export async function getAuthenticatedUser(
 
   const tokenHash = hashSessionToken(rawToken);
   const res = await db.execute({
-    sql: `SELECT u.id, u.username, u.display_name
+    sql: `SELECT u.id, u.username, u.display_name, u.role
           FROM sessions s
           JOIN users u ON u.id = s.user_id
           WHERE s.token_hash = ? AND s.expires_at > datetime('now')`,
@@ -43,7 +48,8 @@ export async function getAuthenticatedUser(
   return {
     id: Number(row.id),
     username: String(row.username),
-    displayName: String(row.display_name)
+    displayName: String(row.display_name),
+    role: (String(row.role) === 'admin' ? 'admin' : 'user') as UserRole
   };
 }
 
@@ -87,10 +93,20 @@ export function createAuthRoutes(db: Client, enableRateLimit = true) {
       return c.json({ error: 'Username sudah terdaftar. Pilih username lain.' }, 409);
     }
 
+    const countRes = await db.execute('SELECT COUNT(*) AS total FROM users');
+    const totalUsers = Number(countRes.rows[0]?.total ?? 0);
+    const configuredAdmin = getConfiguredAdminUsername();
+
+    // First registered user or configured ADMIN_USERNAME becomes admin without hardcoded passwords
+    const role: UserRole =
+      totalUsers === 0 || (configuredAdmin !== null && username === configuredAdmin)
+        ? 'admin'
+        : 'user';
+
     const passwordHash = hashPassword(password);
     const result = await db.execute({
-      sql: 'INSERT INTO users (username, display_name, password_hash) VALUES (?, ?, ?)',
-      args: [username, displayName, passwordHash]
+      sql: 'INSERT INTO users (username, display_name, password_hash, role) VALUES (?, ?, ?, ?)',
+      args: [username, displayName, passwordHash, role]
     });
 
     const userId = Number(result.lastInsertRowid);
@@ -102,7 +118,8 @@ export function createAuthRoutes(db: Client, enableRateLimit = true) {
         user: {
           id: userId,
           username,
-          displayName
+          displayName,
+          role
         }
       },
       201
@@ -118,7 +135,7 @@ export function createAuthRoutes(db: Client, enableRateLimit = true) {
 
     const { username, password } = validated.data;
     const res = await db.execute({
-      sql: 'SELECT id, username, display_name, password_hash FROM users WHERE username = ?',
+      sql: 'SELECT id, username, display_name, password_hash, role FROM users WHERE username = ?',
       args: [username]
     });
 
@@ -128,6 +145,17 @@ export function createAuthRoutes(db: Client, enableRateLimit = true) {
     }
 
     const userId = Number(row.id);
+    let role: UserRole = String(row.role) === 'admin' ? 'admin' : 'user';
+
+    const configuredAdmin = getConfiguredAdminUsername();
+    if (configuredAdmin && String(row.username).toLowerCase() === configuredAdmin && role !== 'admin') {
+      await db.execute({
+        sql: "UPDATE users SET role = 'admin' WHERE id = ?",
+        args: [userId]
+      });
+      role = 'admin';
+    }
+
     const { cookie } = await issueSession(db, userId);
     c.header('Set-Cookie', cookie);
 
@@ -135,7 +163,8 @@ export function createAuthRoutes(db: Client, enableRateLimit = true) {
       user: {
         id: userId,
         username: String(row.username),
-        displayName: String(row.display_name)
+        displayName: String(row.display_name),
+        role
       }
     });
   });

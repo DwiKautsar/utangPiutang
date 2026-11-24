@@ -11,6 +11,7 @@ import { Header } from './components/Header';
 import { SummaryStrip } from './components/SummaryStrip';
 import { CreateDebtForm } from './components/CreateDebtForm';
 import { DebtLedger } from './components/DebtLedger';
+import { AdminPanel } from './components/AdminPanel';
 
 const EMPTY_SUMMARY: DebtSummary = {
   totalReceivableIdr: 0,
@@ -25,9 +26,9 @@ function readInitialTheme(): 'light' | 'dark' {
     const saved = window.localStorage.getItem('bukuutang_theme');
     if (saved === 'dark' || saved === 'light') return saved;
   } catch {
-    // Ignore storage restriction and fall back to light paper theme
+    // Ignore storage restriction and fall back to default dark theme
   }
-  return 'light';
+  return 'dark';
 }
 
 export function App() {
@@ -35,6 +36,7 @@ export function App() {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [activeView, setActiveView] = useState<'personal' | 'admin'>('personal');
 
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
@@ -122,6 +124,7 @@ export function App() {
       await api.logout();
     } finally {
       setUser(null);
+      setActiveView('personal');
       setItems([]);
       setSummary(EMPTY_SUMMARY);
       setLoggingOut(false);
@@ -150,6 +153,7 @@ export function App() {
         onToggleTheme={toggleTheme}
         onAuthenticated={(loggedUser) => {
           setUser(loggedUser);
+          setActiveView('personal');
           setRole('debtor');
           setStatusFilter('all');
         }}
@@ -162,41 +166,54 @@ export function App() {
       <Header
         user={user}
         theme={theme}
+        activeView={activeView}
+        onChangeView={(nextView) => setActiveView(nextView)}
         onToggleTheme={toggleTheme}
         onLogout={handleLogout}
         loggingOut={loggingOut}
       />
 
-      <main class="dashboard-main">
-        <SummaryStrip summary={summary} />
-
-        <div class="workspace-grid">
-          <CreateDebtForm
-            users={users}
-            loadingUsers={loadingUsers}
-            onCreated={async () => {
-              setRole('creditor');
-              await loadDebts();
+      <main>
+        {user.role === 'admin' && activeView === 'admin' ? (
+          <AdminPanel
+            currentUser={user}
+            onDataChanged={async () => {
+              await Promise.all([loadUsers(), loadDebts()]);
             }}
           />
+        ) : (
+          <div class="dashboard-main">
+            <SummaryStrip summary={summary} />
 
-          <DebtLedger
-            role={role}
-            statusFilter={statusFilter}
-            items={items}
-            summary={summary}
-            loading={loadingDebts}
-            error={debtsError}
-            onChangeRole={(nextRole) => setRole(nextRole)}
-            onChangeStatus={(nextStatus) => setStatusFilter(nextStatus)}
-            onRefresh={loadDebts}
-          />
-        </div>
+            <div class="workspace-grid">
+              <CreateDebtForm
+                users={users}
+                loadingUsers={loadingUsers}
+                onCreated={async () => {
+                  setRole('creditor');
+                  await loadDebts();
+                }}
+              />
+
+              <DebtLedger
+                role={role}
+                statusFilter={statusFilter}
+                items={items}
+                summary={summary}
+                loading={loadingDebts}
+                error={debtsError}
+                onChangeRole={(nextRole) => setRole(nextRole)}
+                onChangeStatus={(nextStatus) => setStatusFilter(nextStatus)}
+                onRefresh={loadDebts}
+              />
+            </div>
+          </div>
+        )}
       </main>
 
       <footer class="site-footer">
         <span>BukuUtang: pencatatan utang piutang terhubung antar akun.</span>
-        <span>Database SQLite lokal aktif.</span>
+        <span>Database Turso SQLite aktif.</span>
       </footer>
     </div>
   );

@@ -72,6 +72,27 @@
   font-size: 0.8125rem;
 }
 
+.view-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.role-tag {
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background-color: var(--status-credit-soft);
+  color: var(--ink-primary);
+  border: 1px solid var(--status-credit);
+}
+
+.admin-status-select {
+  width: auto;
+  min-width: 190px;
+}
+
 /* Buttons */
 .btn {
   display: inline-flex;

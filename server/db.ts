@@ -2,10 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createClient, type Client } from '@libsql/client';
 
+export type UserRole = 'user' | 'admin';
+
 export interface PublicUser {
   id: number;
   username: string;
   displayName: string;
+  role: UserRole;
 }
 
 export type DebtStatus = 'unpaid' | 'pending_confirmation' | 'paid' | 'cancelled';

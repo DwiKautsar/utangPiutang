@@ -1,7 +1,28 @@
+export type UserRole = 'user' | 'admin';
+
 export interface UserProfile {
   id: number;
   username: string;
   displayName: string;
+  role: UserRole;
+}
+
+export interface AdminUserItem {
+  id: number;
+  username: string;
+  displayName: string;
+  role: UserRole;
+  createdAt: string;
+  activeReceivableCount: number;
+  activePayableCount: number;
+}
+
+export interface AdminOverview {
+  totalUsers: number;
+  totalAdmins: number;
+  activeDebtCount: number;
+  activeDebtAmountIdr: number;
+  paidDebtCount: number;
 }
 
 export type DebtStatus = 'unpaid' | 'pending_confirmation' | 'paid' | 'cancelled';
@@ -125,6 +146,41 @@ export const api = {
   cancelDebtByCreditor: (id: number) =>
     request<{ ok: boolean; status: DebtStatus }>(`/api/debts/${id}/cancel`, {
       method: 'PATCH'
+    }),
+
+  adminOverview: () => request<{ overview: AdminOverview }>('/api/admin/overview'),
+
+  adminListUsers: () => request<{ users: AdminUserItem[] }>('/api/admin/users'),
+
+  adminUpdateUserRole: (id: number, role: UserRole) =>
+    request<{ ok: boolean; role: UserRole }>(`/api/admin/users/${id}/role`, {
+      method: 'PATCH',
+      body: JSON.stringify({ role })
+    }),
+
+  adminResetPassword: (id: number, newPassword: string) =>
+    request<{ ok: boolean }>(`/api/admin/users/${id}/reset-password`, {
+      method: 'PATCH',
+      body: JSON.stringify({ newPassword })
+    }),
+
+  adminDeleteUser: (id: number) =>
+    request<{ ok: boolean }>(`/api/admin/users/${id}`, {
+      method: 'DELETE'
+    }),
+
+  adminListDebts: (status: string) =>
+    request<{ items: DebtItem[] }>(`/api/admin/debts?status=${encodeURIComponent(status)}`),
+
+  adminUpdateDebtStatus: (id: number, status: DebtStatus) =>
+    request<{ ok: boolean; status: DebtStatus }>(`/api/admin/debts/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status })
+    }),
+
+  adminDeleteDebt: (id: number) =>
+    request<{ ok: boolean }>(`/api/admin/debts/${id}`, {
+      method: 'DELETE'
     })
 };
 

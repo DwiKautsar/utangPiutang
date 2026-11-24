@@ -5,6 +5,7 @@ import { csrfGuard, securityHeaders } from './security.js';
 import { createAuthRoutes, getAuthenticatedUser, type AuthEnv } from './routes/auth.js';
 import { createUsersRoutes } from './routes/users.js';
 import { createDebtsRoutes } from './routes/debts.js';
+import { createAdminRoutes } from './routes/admin.js';
 
 export interface AppOptions {
   db: Client;
@@ -49,6 +50,17 @@ export function createApp(options: AppOptions) {
     return next();
   };
 
+  const requireAdmin = async (
+    c: Parameters<typeof csrfGuard>[0],
+    next: Parameters<typeof csrfGuard>[1]
+  ) => {
+    const user = c.get('user');
+    if (!user || user.role !== 'admin') {
+      return c.json({ error: 'Akses ditolak. Hanya admin yang diizinkan.' }, 403);
+    }
+    return next();
+  };
+
   app.use('/api/users/*', requireAuth);
   app.use('/api/users', requireAuth);
   app.route('/api/users', createUsersRoutes(db));
@@ -56,6 +68,10 @@ export function createApp(options: AppOptions) {
   app.use('/api/debts/*', requireAuth);
   app.use('/api/debts', requireAuth);
   app.route('/api/debts', createDebtsRoutes(db));
+
+  app.use('/api/admin/*', requireAuth, requireAdmin);
+  app.use('/api/admin', requireAuth, requireAdmin);
+  app.route('/api/admin', createAdminRoutes(db));
 
   app.onError((_err, c) => {
     return c.json({ error: 'Terjadi gangguan pada server. Coba beberapa saat lagi.' }, 500);
