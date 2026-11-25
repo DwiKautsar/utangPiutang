@@ -53,7 +53,7 @@ export function DebtLedger({
 
   function openAction(nextAction: PendingAction) {
     setAction(nextAction);
-    setPaymentNote('');
+    setPaymentNote(nextAction.type === 'confirm' ? (nextAction.item.paymentNote ?? '') : '');
     setActionError(null);
   }
 
@@ -66,7 +66,7 @@ export function DebtLedger({
       if (action.type === 'pay') {
         await api.markPaidByDebtor(action.item.id, paymentNote);
       } else if (action.type === 'confirm') {
-        await api.confirmPaidByCreditor(action.item.id);
+        await api.confirmPaidByCreditor(action.item.id, paymentNote);
       } else if (action.type === 'reject') {
         await api.rejectPaymentByCreditor(action.item.id);
       } else if (action.type === 'cancel') {
@@ -336,16 +336,24 @@ export function DebtLedger({
           </div>
         )}
 
-        {action?.type === 'pay' && (
+        {(action?.type === 'pay' || action?.type === 'confirm') && (
           <div class="field">
-            <label for="payment-note-input">Catatan Pembayaran (Opsional)</label>
+            <label for="payment-note-input">
+              {action.type === 'pay'
+                ? 'Catatan Pembayaran (Opsional)'
+                : 'Catatan Pelunasan (Opsional)'}
+            </label>
             <textarea
               id="payment-note-input"
               class="textarea"
               maxLength={200}
               value={paymentNote}
               onInput={(e) => setPaymentNote((e.target as HTMLTextAreaElement).value)}
-              placeholder="misal: Sudah transfer BCA a.n. Budi tanggal 24 Nov"
+              placeholder={
+                action.type === 'pay'
+                  ? 'misal: Sudah transfer BCA a.n. Budi tanggal 24 Nov'
+                  : 'misal: Sudah diterima tunai / transfer masuk'
+              }
             />
           </div>
         )}

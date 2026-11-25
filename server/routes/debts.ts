@@ -286,11 +286,21 @@ export function createDebtsRoutes(db: Client) {
       return c.json({ error: 'Catatan ini sudah lunas atau dibatalkan.' }, 409);
     }
 
+    const body = await c.req.json().catch(() => null);
+    const noteResult = validatePaymentNote(body);
+    if (!noteResult.ok) {
+      return c.json({ error: noteResult.error }, 400);
+    }
+
+    // Preserve debtor's existing payment_note when creditor leaves the note empty
     await db.execute({
       sql: `UPDATE debts
-            SET status = 'paid', paid_at = datetime('now'), updated_at = datetime('now')
+            SET status = 'paid',
+                payment_note = COALESCE(?, payment_note),
+                paid_at = datetime('now'),
+                updated_at = datetime('now')
             WHERE id = ?`,
-      args: [debtId]
+      args: [noteResult.data ?? null, debtId]
     });
 
     return c.json({ ok: true, status: 'paid' });

@@ -142,9 +142,10 @@ export const api = {
       body: JSON.stringify({ paymentNote })
     }),
 
-  confirmPaidByCreditor: (id: number) =>
+  confirmPaidByCreditor: (id: number, paymentNote?: string) =>
     request<{ ok: boolean; status: DebtStatus }>(`/api/debts/${id}/confirm`, {
-      method: 'PATCH'
+      method: 'PATCH',
+      body: JSON.stringify({ paymentNote: paymentNote ?? '' })
     }),
 
   rejectPaymentByCreditor: (id: number) =>
