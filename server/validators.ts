@@ -61,6 +61,7 @@ export interface CreateDebtItemInput {
   recordType: 'receivable' | 'payable';
   debtorId: number | null;
   debtorName: string | null;
+  creditorId: number | null;
   creditorName: string | null;
   amountIdr: number;
   description: string;
@@ -113,22 +114,45 @@ export function validateCreateDebtsInput(body: unknown): ValidationResult<Create
     }
 
     if (recordType === 'payable') {
+      const hasCreditorId =
+        row.creditorId !== undefined &&
+        row.creditorId !== null &&
+        String(row.creditorId).trim() !== '';
+      const creditorId = hasCreditorId ? Number(row.creditorId) : null;
       const creditorName = typeof row.creditorName === 'string' ? row.creditorName.trim() : '';
-      if (creditorName.length < 2 || creditorName.length > 60) {
-        return {
-          ok: false,
-          error: `Nama pemberi utang pada baris ke-${i + 1} harus 2 sampai 60 karakter.`
-        };
+
+      if (creditorId !== null) {
+        if (!Number.isInteger(creditorId) || creditorId <= 0) {
+          return { ok: false, error: `Akun pemberi utang pada baris ke-${i + 1} tidak valid.` };
+        }
+        parsed.push({
+          recordType: 'payable',
+          debtorId: null,
+          debtorName: null,
+          creditorId,
+          creditorName: null,
+          amountIdr,
+          description,
+          dueDate: dueDateRaw || null
+        });
+      } else {
+        if (creditorName.length < 2 || creditorName.length > 60) {
+          return {
+            ok: false,
+            error: `Pilih akun pemberi utang atau isi nama (2 sampai 60 karakter) pada baris ke-${i + 1}.`
+          };
+        }
+        parsed.push({
+          recordType: 'payable',
+          debtorId: null,
+          debtorName: null,
+          creditorId: null,
+          creditorName,
+          amountIdr,
+          description,
+          dueDate: dueDateRaw || null
+        });
       }
-      parsed.push({
-        recordType: 'payable',
-        debtorId: null,
-        debtorName: null,
-        creditorName,
-        amountIdr,
-        description,
-        dueDate: dueDateRaw || null
-      });
     } else {
       const hasDebtorId =
         row.debtorId !== undefined && row.debtorId !== null && String(row.debtorId).trim() !== '';
@@ -143,6 +167,7 @@ export function validateCreateDebtsInput(body: unknown): ValidationResult<Create
           recordType: 'receivable',
           debtorId,
           debtorName: null,
+          creditorId: null,
           creditorName: null,
           amountIdr,
           description,
@@ -159,6 +184,7 @@ export function validateCreateDebtsInput(body: unknown): ValidationResult<Create
           recordType: 'receivable',
           debtorId: null,
           debtorName,
+          creditorId: null,
           creditorName: null,
           amountIdr,
           description,

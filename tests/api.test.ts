@@ -360,6 +360,30 @@ test('Revisi: admin tidak bisa ditagih & catatan piutang/utang manual tanpa akun
       cookie: memberCookie
     });
     assert.equal(settleManualPay.status, 200);
+
+    // 5. Catat utang ke akun terdaftar lain -> otomatis muncul di Piutang Saya milik pemberi utang
+    const regFriend = await jsonRequest(app, '/api/auth/register', {
+      method: 'POST',
+      body: { username: 'doni', displayName: 'Doni Saputra', password: 'password123' }
+    });
+    const friendCookie = extractCookie(regFriend);
+    const friendUser = ((await regFriend.json()) as { user: { id: number } }).user;
+
+    const linkedPayRes = await jsonRequest(app, '/api/debts', {
+      method: 'POST',
+      cookie: memberCookie,
+      body: {
+        items: [{ recordType: 'payable', creditorId: friendUser.id, amountIdr: 30000, description: 'Pinjam beli bensin' }]
+      }
+    });
+    assert.equal(linkedPayRes.status, 201);
+
+    const friendReceivables = (await (
+      await jsonRequest(app, '/api/debts?role=creditor&status=active', { cookie: friendCookie })
+    ).json()) as { items: Array<{ amountIdr: number; creditorId: number }> };
+    assert.equal(friendReceivables.items.length, 1);
+    assert.equal(friendReceivables.items[0].amountIdr, 30000);
+    assert.equal(friendReceivables.items[0].creditorId, friendUser.id);
   } finally {
     db.close();
   }

@@ -454,6 +454,20 @@
   gap: 8px;
 }
 
+.role-explainer {
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  background-color: var(--bg-surface);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  color: var(--ink-secondary);
+}
+
+.role-explainer strong {
+  color: var(--ink-primary);
+}
+
 .form-actions {
   display: flex;
   flex-wrap: wrap;

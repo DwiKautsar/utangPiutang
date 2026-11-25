@@ -156,35 +156,35 @@ export function createDebtsRoutes(db: Client) {
     }
 
     const items = validated.data;
-    const linkedDebtorIds = Array.from(
+    const linkedCounterpartyIds = Array.from(
       new Set(
         items
-          .filter((item) => item.recordType === 'receivable' && item.debtorId !== null)
-          .map((item) => item.debtorId as number)
+          .map((item) => (item.recordType === 'payable' ? item.creditorId : item.debtorId))
+          .filter((id): id is number => id !== null)
       )
     );
 
-    for (const debtorId of linkedDebtorIds) {
-      if (debtorId === user.id) {
-        return c.json({ error: 'Tidak bisa mencatat piutang ke akun sendiri.' }, 400);
+    for (const targetId of linkedCounterpartyIds) {
+      if (targetId === user.id) {
+        return c.json({ error: 'Tidak bisa mencatat utang atau piutang ke akun sendiri.' }, 400);
       }
     }
 
-    if (linkedDebtorIds.length > 0) {
-      const placeholders = linkedDebtorIds.map(() => '?').join(',');
+    if (linkedCounterpartyIds.length > 0) {
+      const placeholders = linkedCounterpartyIds.map(() => '?').join(',');
       const foundUsers = await db.execute({
         sql: `SELECT id, role FROM users WHERE id IN (${placeholders})`,
-        args: linkedDebtorIds
+        args: linkedCounterpartyIds
       });
 
-      if (foundUsers.rows.length !== linkedDebtorIds.length) {
-        return c.json({ error: 'Salah satu akun peminjam tidak ditemukan.' }, 404);
+      if (foundUsers.rows.length !== linkedCounterpartyIds.length) {
+        return c.json({ error: 'Salah satu akun tujuan tidak ditemukan.' }, 404);
       }
 
-      // Enforce server-side policy: admin accounts cannot be tagged as debtors
+      // Enforce server-side policy: admin accounts cannot be tagged in debts
       const hasAdminTarget = foundUsers.rows.some((row) => String(row.role) === 'admin');
       if (hasAdminTarget) {
-        return c.json({ error: 'Akun admin tidak dapat ditagih sebagai peminjam.' }, 400);
+        return c.json({ error: 'Akun admin tidak dapat dipilih dalam catatan utang piutang.' }, 400);
       }
     }
 
@@ -193,8 +193,15 @@ export function createDebtsRoutes(db: Client) {
         if (item.recordType === 'payable') {
           return {
             sql: `INSERT INTO debts (creditor_id, debtor_id, creditor_manual_name, debtor_manual_name, amount_idr, description, due_date)
-                  VALUES (NULL, ?, ?, NULL, ?, ?, ?)`,
-            args: [user.id, item.creditorName, item.amountIdr, item.description, item.dueDate]
+                  VALUES (?, ?, ?, NULL, ?, ?, ?)`,
+            args: [
+              item.creditorId,
+              user.id,
+              item.creditorName,
+              item.amountIdr,
+              item.description,
+              item.dueDate
+            ]
           };
         }
         return {

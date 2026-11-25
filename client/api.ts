@@ -50,6 +50,7 @@ export interface CreateDebtPayloadItem {
   recordType: 'receivable' | 'payable';
   debtorId?: number;
   debtorName?: string;
+  creditorId?: number;
   creditorName?: string;
   amountIdr: number;
   description: string;

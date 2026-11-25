@@ -7,10 +7,10 @@ import {
   type UserProfile
 } from '../api';
 
-interface BorrowerDraft {
+interface CounterpartyDraft {
   key: number;
   targetMode: 'account' | 'manual';
-  debtorId: string;
+  targetUserId: string;
   manualName: string;
   amountIdr: string;
   noteOverride: string;
@@ -28,11 +28,11 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
   const [recordType, setRecordType] = useState<'receivable' | 'payable'>('receivable');
   const [sharedDescription, setSharedDescription] = useState('');
   const [dueDate, setDueDate] = useState('');
-  const [rows, setRows] = useState<BorrowerDraft[]>([
+  const [rows, setRows] = useState<CounterpartyDraft[]>([
     {
       key: 1,
       targetMode: users.length > 0 ? 'account' : 'manual',
-      debtorId: '',
+      targetUserId: '',
       manualName: '',
       amountIdr: '',
       noteOverride: ''
@@ -48,8 +48,8 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
       ...prev,
       {
         key: nextDraftKey++,
-        targetMode: recordType === 'receivable' && users.length > 0 ? 'account' : 'manual',
-        debtorId: '',
+        targetMode: users.length > 0 ? 'account' : 'manual',
+        targetUserId: '',
         manualName: '',
         amountIdr: '',
         noteOverride: ''
@@ -62,7 +62,7 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
     setRows((prev) => prev.filter((item) => item.key !== key));
   }
 
-  function updateRow(key: number, field: keyof Omit<BorrowerDraft, 'key'>, value: string) {
+  function updateRow(key: number, field: keyof Omit<CounterpartyDraft, 'key'>, value: string) {
     setRows((prev) => prev.map((item) => (item.key === key ? { ...item, [field]: value } : item)));
   }
 
@@ -92,48 +92,62 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
         return;
       }
 
+      const useAccount = row.targetMode === 'account' && users.length > 0;
+
       if (recordType === 'payable') {
-        const creditorName = row.manualName.trim();
-        if (creditorName.length < 2) {
-          setError(`Isi nama pemberi utang (minimal 2 karakter) pada baris ke-${i + 1}.`);
-          return;
-        }
-        payloadItems.push({
-          recordType: 'payable',
-          creditorName,
-          amountIdr,
-          description,
-          dueDate: dueDate || undefined
-        });
-      } else {
-        const useAccount = row.targetMode === 'account' && users.length > 0;
         if (useAccount) {
-          const debtorId = Number(row.debtorId);
-          if (!debtorId) {
-            setError(`Pilih akun peminjam pada baris ke-${i + 1}, atau ganti ke Tulis Nama Manual.`);
+          const creditorId = Number(row.targetUserId);
+          if (!creditorId) {
+            setError(`Pilih akun pemberi utang pada baris ke-${i + 1}, atau ganti ke Tulis Nama Manual.`);
             return;
           }
           payloadItems.push({
-            recordType: 'receivable',
-            debtorId,
+            recordType: 'payable',
+            creditorId,
             amountIdr,
             description,
             dueDate: dueDate || undefined
           });
         } else {
-          const debtorName = row.manualName.trim();
-          if (debtorName.length < 2) {
-            setError(`Isi nama peminjam (minimal 2 karakter) pada baris ke-${i + 1}.`);
+          const creditorName = row.manualName.trim();
+          if (creditorName.length < 2) {
+            setError(`Isi nama pemberi utang (minimal 2 karakter) pada baris ke-${i + 1}.`);
             return;
           }
           payloadItems.push({
-            recordType: 'receivable',
-            debtorName,
+            recordType: 'payable',
+            creditorName,
             amountIdr,
             description,
             dueDate: dueDate || undefined
           });
         }
+      } else if (useAccount) {
+        const debtorId = Number(row.targetUserId);
+        if (!debtorId) {
+          setError(`Pilih akun peminjam pada baris ke-${i + 1}, atau ganti ke Tulis Nama Manual.`);
+          return;
+        }
+        payloadItems.push({
+          recordType: 'receivable',
+          debtorId,
+          amountIdr,
+          description,
+          dueDate: dueDate || undefined
+        });
+      } else {
+        const debtorName = row.manualName.trim();
+        if (debtorName.length < 2) {
+          setError(`Isi nama peminjam (minimal 2 karakter) pada baris ke-${i + 1}.`);
+          return;
+        }
+        payloadItems.push({
+          recordType: 'receivable',
+          debtorName,
+          amountIdr,
+          description,
+          dueDate: dueDate || undefined
+        });
       }
     }
 
@@ -145,8 +159,8 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
       setRows([
         {
           key: nextDraftKey++,
-          targetMode: recordType === 'receivable' && users.length > 0 ? 'account' : 'manual',
-          debtorId: '',
+          targetMode: users.length > 0 ? 'account' : 'manual',
+          targetUserId: '',
           manualName: '',
           amountIdr: '',
           noteOverride: ''
@@ -154,8 +168,8 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
       ]);
       setSuccessMessage(
         recordType === 'payable'
-          ? `${payloadItems.length} catatan utang manual tersimpan di Tagihan Saya.`
-          : `${payloadItems.length} catatan piutang tersimpan. Akun terdaftar otomatis menerima tagihan.`
+          ? `${payloadItems.length} catatan utang tersimpan di Tagihan Saya.`
+          : `${payloadItems.length} catatan piutang tersimpan di Piutang Saya.`
       );
       await onCreated(recordType);
     } catch (err) {
@@ -174,10 +188,7 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
       <div class="panel-heading">
         <div>
           <h2 id="create-debt-heading">Catat Transaksi Baru</h2>
-          <p>
-            Pilih akun terdaftar agar tagihan tersinkron otomatis, atau tulis nama manual untuk
-            orang yang belum punya akun.
-          </p>
+          <p>Pilih akun terdaftar agar otomatis terhubung, atau tulis nama manual jika belum punya akun.</p>
         </div>
       </div>
 
@@ -206,8 +217,20 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
             setSuccessMessage(null);
           }}
         >
-          Catat Utang Manual
+          Catat Utang
         </button>
+      </div>
+
+      <div class="role-explainer" role="note">
+        {recordType === 'receivable' ? (
+          <p>
+            <strong>Piutang:</strong> Orang lain berutang kepada Anda (Anda yang meminjamkan uang).
+          </p>
+        ) : (
+          <p>
+            <strong>Utang:</strong> Anda yang berutang kepada orang lain (tagihan yang harus Anda bayar).
+          </p>
+        )}
       </div>
 
       <form class="form-stack" onSubmit={handleSubmit} noValidate>
@@ -234,7 +257,7 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
             placeholder={
               recordType === 'receivable'
                 ? 'misal: Patungan makan siang di kantin'
-                : 'misal: Belanja warung / pinjaman tunai'
+                : 'misal: Pinjam uang parkir / belanja warung'
             }
           />
         </div>
@@ -252,8 +275,7 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
 
         <div class="borrower-list" aria-label="Daftar pihak transaksi">
           {rows.map((row, idx) => {
-            const effectiveMode =
-              recordType === 'payable' || users.length === 0 ? 'manual' : row.targetMode;
+            const effectiveMode = users.length === 0 ? 'manual' : row.targetMode;
 
             return (
               <div class="borrower-row" key={row.key}>
@@ -272,7 +294,7 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
                   )}
                 </div>
 
-                {recordType === 'receivable' && !loadingUsers && users.length > 0 && (
+                {!loadingUsers && users.length > 0 && (
                   <div class="mode-toggle-row" role="group" aria-label={`Sumber nama baris ${idx + 1}`}>
                     <button
                       type="button"
@@ -295,13 +317,15 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
 
                 {effectiveMode === 'account' ? (
                   <div class="field">
-                    <label for={`debtor-${row.key}`}>Akun Peminjam</label>
+                    <label for={`target-user-${row.key}`}>
+                      {recordType === 'receivable' ? 'Akun Peminjam' : 'Akun Pemberi Utang'}
+                    </label>
                     <select
-                      id={`debtor-${row.key}`}
+                      id={`target-user-${row.key}`}
                       class="select"
-                      value={row.debtorId}
+                      value={row.targetUserId}
                       onChange={(e) =>
-                        updateRow(row.key, 'debtorId', (e.target as HTMLSelectElement).value)
+                        updateRow(row.key, 'targetUserId', (e.target as HTMLSelectElement).value)
                       }
                     >
                       <option value="">Pilih pengguna...</option>
@@ -390,14 +414,14 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
             onClick={addRow}
             disabled={rows.length >= 20 || submitting}
           >
-            {recordType === 'receivable' ? '+ Tambah Peminjam' : '+ Tambah Baris'}
+            {recordType === 'receivable' ? '+ Tambah Peminjam' : '+ Tambah Pemberi Utang'}
           </button>
           <button type="submit" class="btn btn-primary" disabled={submitting}>
             {submitting
               ? 'Menyimpan...'
               : recordType === 'receivable'
                 ? 'Simpan Piutang'
-                : 'Simpan Utang Manual'}
+                : 'Simpan Utang'}
           </button>
         </div>
       </form>
