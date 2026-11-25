@@ -189,8 +189,8 @@ export function App() {
               <CreateDebtForm
                 users={users}
                 loadingUsers={loadingUsers}
-                onCreated={async () => {
-                  setRole('creditor');
+                onCreated={async (createdType) => {
+                  setRole(createdType === 'payable' ? 'debtor' : 'creditor');
                   await loadDebts();
                 }}
               />

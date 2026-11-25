@@ -27,8 +27,10 @@ export function ensureDatabaseReady(db: Client): Promise<void> {
         )`,
         `CREATE TABLE IF NOT EXISTS debts (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          creditor_id INTEGER NOT NULL REFERENCES users(id),
-          debtor_id INTEGER NOT NULL REFERENCES users(id),
+          creditor_id INTEGER REFERENCES users(id),
+          debtor_id INTEGER REFERENCES users(id),
+          creditor_manual_name TEXT,
+          debtor_manual_name TEXT,
           amount_idr INTEGER NOT NULL CHECK (amount_idr > 0),
           description TEXT NOT NULL,
           due_date TEXT,
@@ -38,7 +40,9 @@ export function ensureDatabaseReady(db: Client): Promise<void> {
           paid_at TEXT,
           created_at TEXT NOT NULL DEFAULT (datetime('now')),
           updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-          CHECK (creditor_id != debtor_id)
+          CHECK (creditor_id IS NOT NULL OR creditor_manual_name IS NOT NULL),
+          CHECK (debtor_id IS NOT NULL OR debtor_manual_name IS NOT NULL),
+          CHECK (creditor_id IS NULL OR debtor_id IS NULL OR creditor_id != debtor_id)
         )`,
         'CREATE INDEX IF NOT EXISTS idx_debts_creditor ON debts(creditor_id, status)',
         'CREATE INDEX IF NOT EXISTS idx_debts_debtor ON debts(debtor_id, status)',
@@ -47,16 +51,61 @@ export function ensureDatabaseReady(db: Client): Promise<void> {
       'write'
     );
 
-    // Safe migration for existing Turso databases created before the role column existed
-    const tableInfo = await db.execute('PRAGMA table_info(users)');
-    const hasRoleColumn = tableInfo.rows.some((row) => String(row.name) === 'role');
+    // Safe migration for existing databases created before role column existed
+    const usersInfo = await db.execute('PRAGMA table_info(users)');
+    const hasRoleColumn = usersInfo.rows.some((row) => String(row.name) === 'role');
     if (!hasRoleColumn) {
       await db.execute(
         "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin'))"
       );
     }
 
-    // Optional env-driven admin bootstrap so existing production accounts can be promoted safely
+    // Safe table rebuild for existing databases where creditor_id/debtor_id were NOT NULL
+    const debtsInfo = await db.execute('PRAGMA table_info(debts)');
+    const hasManualColumns = debtsInfo.rows.some(
+      (row) => String(row.name) === 'debtor_manual_name'
+    );
+    if (!hasManualColumns) {
+      await db.batch(
+        [
+          'PRAGMA foreign_keys = OFF',
+          `CREATE TABLE debts_migrated (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            creditor_id INTEGER REFERENCES users(id),
+            debtor_id INTEGER REFERENCES users(id),
+            creditor_manual_name TEXT,
+            debtor_manual_name TEXT,
+            amount_idr INTEGER NOT NULL CHECK (amount_idr > 0),
+            description TEXT NOT NULL,
+            due_date TEXT,
+            status TEXT NOT NULL DEFAULT 'unpaid'
+              CHECK (status IN ('unpaid', 'pending_confirmation', 'paid', 'cancelled')),
+            payment_note TEXT,
+            paid_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            CHECK (creditor_id IS NOT NULL OR creditor_manual_name IS NOT NULL),
+            CHECK (debtor_id IS NOT NULL OR debtor_manual_name IS NOT NULL),
+            CHECK (creditor_id IS NULL OR debtor_id IS NULL OR creditor_id != debtor_id)
+          )`,
+          `INSERT INTO debts_migrated (
+            id, creditor_id, debtor_id, amount_idr, description, due_date,
+            status, payment_note, paid_at, created_at, updated_at
+          )
+          SELECT
+            id, creditor_id, debtor_id, amount_idr, description, due_date,
+            status, payment_note, paid_at, created_at, updated_at
+          FROM debts`,
+          'DROP TABLE debts',
+          'ALTER TABLE debts_migrated RENAME TO debts',
+          'CREATE INDEX IF NOT EXISTS idx_debts_creditor ON debts(creditor_id, status)',
+          'CREATE INDEX IF NOT EXISTS idx_debts_debtor ON debts(debtor_id, status)',
+          'PRAGMA foreign_keys = ON'
+        ],
+        'write'
+      );
+    }
+
     const envAdmin = process.env.ADMIN_USERNAME?.trim().toLowerCase();
     if (envAdmin) {
       await db.execute({

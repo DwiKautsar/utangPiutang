@@ -1,9 +1,17 @@
 import { useState } from 'preact/hooks';
-import { api, ApiError, formatRupiah, type UserProfile } from '../api';
+import {
+  api,
+  ApiError,
+  formatRupiah,
+  type CreateDebtPayloadItem,
+  type UserProfile
+} from '../api';
 
 interface BorrowerDraft {
   key: number;
+  targetMode: 'account' | 'manual';
   debtorId: string;
+  manualName: string;
   amountIdr: string;
   noteOverride: string;
 }
@@ -11,16 +19,24 @@ interface BorrowerDraft {
 interface CreateDebtFormProps {
   users: UserProfile[];
   loadingUsers: boolean;
-  onCreated: () => Promise<void>;
+  onCreated: (recordType: 'receivable' | 'payable') => Promise<void>;
 }
 
 let nextDraftKey = 2;
 
 export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFormProps) {
+  const [recordType, setRecordType] = useState<'receivable' | 'payable'>('receivable');
   const [sharedDescription, setSharedDescription] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [rows, setRows] = useState<BorrowerDraft[]>([
-    { key: 1, debtorId: '', amountIdr: '', noteOverride: '' }
+    {
+      key: 1,
+      targetMode: users.length > 0 ? 'account' : 'manual',
+      debtorId: '',
+      manualName: '',
+      amountIdr: '',
+      noteOverride: ''
+    }
   ]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,7 +46,14 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
     if (rows.length >= 20) return;
     setRows((prev) => [
       ...prev,
-      { key: nextDraftKey++, debtorId: '', amountIdr: '', noteOverride: '' }
+      {
+        key: nextDraftKey++,
+        targetMode: recordType === 'receivable' && users.length > 0 ? 'account' : 'manual',
+        debtorId: '',
+        manualName: '',
+        amountIdr: '',
+        noteOverride: ''
+      }
     ]);
   }
 
@@ -53,23 +76,13 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
     setError(null);
     setSuccessMessage(null);
 
-    const payloadItems: Array<{
-      debtorId: number;
-      amountIdr: number;
-      description: string;
-      dueDate?: string;
-    }> = [];
+    const payloadItems: CreateDebtPayloadItem[] = [];
 
     for (let i = 0; i < rows.length; i += 1) {
       const row = rows[i];
-      const debtorId = Number(row.debtorId);
       const amountIdr = Number(row.amountIdr.replace(/[^\d]/g, ''));
       const description = (row.noteOverride.trim() || sharedDescription.trim()).trim();
 
-      if (!debtorId) {
-        setError(`Pilih peminjam pada baris ke-${i + 1}.`);
-        return;
-      }
       if (!Number.isInteger(amountIdr) || amountIdr <= 0) {
         setError(`Masukkan nominal Rupiah yang valid pada baris ke-${i + 1}.`);
         return;
@@ -79,12 +92,49 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
         return;
       }
 
-      payloadItems.push({
-        debtorId,
-        amountIdr,
-        description,
-        dueDate: dueDate || undefined
-      });
+      if (recordType === 'payable') {
+        const creditorName = row.manualName.trim();
+        if (creditorName.length < 2) {
+          setError(`Isi nama pemberi utang (minimal 2 karakter) pada baris ke-${i + 1}.`);
+          return;
+        }
+        payloadItems.push({
+          recordType: 'payable',
+          creditorName,
+          amountIdr,
+          description,
+          dueDate: dueDate || undefined
+        });
+      } else {
+        const useAccount = row.targetMode === 'account' && users.length > 0;
+        if (useAccount) {
+          const debtorId = Number(row.debtorId);
+          if (!debtorId) {
+            setError(`Pilih akun peminjam pada baris ke-${i + 1}, atau ganti ke Tulis Nama Manual.`);
+            return;
+          }
+          payloadItems.push({
+            recordType: 'receivable',
+            debtorId,
+            amountIdr,
+            description,
+            dueDate: dueDate || undefined
+          });
+        } else {
+          const debtorName = row.manualName.trim();
+          if (debtorName.length < 2) {
+            setError(`Isi nama peminjam (minimal 2 karakter) pada baris ke-${i + 1}.`);
+            return;
+          }
+          payloadItems.push({
+            recordType: 'receivable',
+            debtorName,
+            amountIdr,
+            description,
+            dueDate: dueDate || undefined
+          });
+        }
+      }
     }
 
     setSubmitting(true);
@@ -92,16 +142,27 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
       await api.createDebts(payloadItems);
       setSharedDescription('');
       setDueDate('');
-      setRows([{ key: nextDraftKey++, debtorId: '', amountIdr: '', noteOverride: '' }]);
+      setRows([
+        {
+          key: nextDraftKey++,
+          targetMode: recordType === 'receivable' && users.length > 0 ? 'account' : 'manual',
+          debtorId: '',
+          manualName: '',
+          amountIdr: '',
+          noteOverride: ''
+        }
+      ]);
       setSuccessMessage(
-        `${payloadItems.length} catatan piutang tersimpan. Tagihan otomatis muncul di akun peminjam.`
+        recordType === 'payable'
+          ? `${payloadItems.length} catatan utang manual tersimpan di Tagihan Saya.`
+          : `${payloadItems.length} catatan piutang tersimpan. Akun terdaftar otomatis menerima tagihan.`
       );
-      await onCreated();
+      await onCreated(recordType);
     } catch (err) {
       if (err instanceof ApiError) {
         setError(err.message);
       } else {
-        setError('Gagal menyimpan catatan piutang. Coba lagi.');
+        setError('Gagal menyimpan catatan. Coba lagi.');
       }
     } finally {
       setSubmitting(false);
@@ -112,65 +173,94 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
     <section class="panel" aria-labelledby="create-debt-heading">
       <div class="panel-heading">
         <div>
-          <h2 id="create-debt-heading">Catat Piutang Baru</h2>
-          <p>Input satu atau beberapa orang sekaligus. Tagihan langsung masuk ke akun mereka.</p>
+          <h2 id="create-debt-heading">Catat Transaksi Baru</h2>
+          <p>
+            Pilih akun terdaftar agar tagihan tersinkron otomatis, atau tulis nama manual untuk
+            orang yang belum punya akun.
+          </p>
         </div>
       </div>
 
-      {loadingUsers ? (
-        <div class="state-box" role="status">
-          <p>Memuat daftar akun pengguna...</p>
-        </div>
-      ) : users.length === 0 ? (
-        <div class="state-box">
-          <h3>Belum ada akun lain terdaftar</h3>
-          <p>
-            Buat minimal satu akun pengguna lain agar Anda bisa memilih peminjam dan melihat
-            tagihan muncul otomatis di akun mereka.
-          </p>
-        </div>
-      ) : (
-        <form class="form-stack" onSubmit={handleSubmit} noValidate>
-          {error && (
-            <div class="alert alert-error" role="alert">
-              {error}
-            </div>
-          )}
-          {successMessage && (
-            <div class="alert alert-success" role="status">
-              {successMessage}
-            </div>
-          )}
+      <div class="tab-bar" role="tablist" aria-label="Jenis catatan baru">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={recordType === 'receivable'}
+          class="tab-btn"
+          onClick={() => {
+            setRecordType('receivable');
+            setError(null);
+            setSuccessMessage(null);
+          }}
+        >
+          Catat Piutang
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={recordType === 'payable'}
+          class="tab-btn"
+          onClick={() => {
+            setRecordType('payable');
+            setError(null);
+            setSuccessMessage(null);
+          }}
+        >
+          Catat Utang Manual
+        </button>
+      </div>
 
-          <div class="field">
-            <label for="debt-shared-desc">Keterangan Utama</label>
-            <input
-              id="debt-shared-desc"
-              type="text"
-              class="input"
-              maxLength={160}
-              value={sharedDescription}
-              onInput={(e) => setSharedDescription((e.target as HTMLInputElement).value)}
-              placeholder="misal: Patungan makan siang di kantin"
-            />
+      <form class="form-stack" onSubmit={handleSubmit} noValidate>
+        {error && (
+          <div class="alert alert-error" role="alert">
+            {error}
           </div>
-
-          <div class="field">
-            <label for="debt-due-date">Jatuh Tempo (Opsional)</label>
-            <input
-              id="debt-due-date"
-              type="date"
-              class="input"
-              value={dueDate}
-              onInput={(e) => setDueDate((e.target as HTMLInputElement).value)}
-            />
+        )}
+        {successMessage && (
+          <div class="alert alert-success" role="status">
+            {successMessage}
           </div>
+        )}
 
-          <div class="borrower-list" aria-label="Daftar orang yang berutang">
-            {rows.map((row, idx) => (
+        <div class="field">
+          <label for="debt-shared-desc">Keterangan Utama</label>
+          <input
+            id="debt-shared-desc"
+            type="text"
+            class="input"
+            maxLength={160}
+            value={sharedDescription}
+            onInput={(e) => setSharedDescription((e.target as HTMLInputElement).value)}
+            placeholder={
+              recordType === 'receivable'
+                ? 'misal: Patungan makan siang di kantin'
+                : 'misal: Belanja warung / pinjaman tunai'
+            }
+          />
+        </div>
+
+        <div class="field">
+          <label for="debt-due-date">Jatuh Tempo (Opsional)</label>
+          <input
+            id="debt-due-date"
+            type="date"
+            class="input"
+            value={dueDate}
+            onInput={(e) => setDueDate((e.target as HTMLInputElement).value)}
+          />
+        </div>
+
+        <div class="borrower-list" aria-label="Daftar pihak transaksi">
+          {rows.map((row, idx) => {
+            const effectiveMode =
+              recordType === 'payable' || users.length === 0 ? 'manual' : row.targetMode;
+
+            return (
               <div class="borrower-row" key={row.key}>
                 <div class="borrower-row-head">
-                  <span class="borrower-index tabular-num">Peminjam #{idx + 1}</span>
+                  <span class="borrower-index tabular-num">
+                    {recordType === 'receivable' ? `Peminjam #${idx + 1}` : `Pemberi Utang #${idx + 1}`}
+                  </span>
                   {rows.length > 1 && (
                     <button
                       type="button"
@@ -182,22 +272,70 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
                   )}
                 </div>
 
-                <div class="field">
-                  <label for={`debtor-${row.key}`}>Akun Peminjam</label>
-                  <select
-                    id={`debtor-${row.key}`}
-                    class="select"
-                    value={row.debtorId}
-                    onChange={(e) => updateRow(row.key, 'debtorId', (e.target as HTMLSelectElement).value)}
-                  >
-                    <option value="">Pilih pengguna...</option>
-                    {users.map((u) => (
-                      <option value={String(u.id)} key={u.id}>
-                        {u.displayName} (@{u.username})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                {recordType === 'receivable' && !loadingUsers && users.length > 0 && (
+                  <div class="mode-toggle-row" role="group" aria-label={`Sumber nama baris ${idx + 1}`}>
+                    <button
+                      type="button"
+                      class={`btn btn-sm ${effectiveMode === 'account' ? 'btn-secondary' : 'btn-ghost'}`}
+                      aria-pressed={effectiveMode === 'account'}
+                      onClick={() => updateRow(row.key, 'targetMode', 'account')}
+                    >
+                      Akun Terdaftar
+                    </button>
+                    <button
+                      type="button"
+                      class={`btn btn-sm ${effectiveMode === 'manual' ? 'btn-secondary' : 'btn-ghost'}`}
+                      aria-pressed={effectiveMode === 'manual'}
+                      onClick={() => updateRow(row.key, 'targetMode', 'manual')}
+                    >
+                      Tulis Nama Manual
+                    </button>
+                  </div>
+                )}
+
+                {effectiveMode === 'account' ? (
+                  <div class="field">
+                    <label for={`debtor-${row.key}`}>Akun Peminjam</label>
+                    <select
+                      id={`debtor-${row.key}`}
+                      class="select"
+                      value={row.debtorId}
+                      onChange={(e) =>
+                        updateRow(row.key, 'debtorId', (e.target as HTMLSelectElement).value)
+                      }
+                    >
+                      <option value="">Pilih pengguna...</option>
+                      {users.map((u) => (
+                        <option value={String(u.id)} key={u.id}>
+                          {u.displayName} (@{u.username})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div class="field">
+                    <label for={`manual-name-${row.key}`}>
+                      {recordType === 'receivable'
+                        ? 'Nama Peminjam (Tanpa Akun)'
+                        : 'Nama Pemberi Utang (Tanpa Akun)'}
+                    </label>
+                    <input
+                      id={`manual-name-${row.key}`}
+                      type="text"
+                      class="input"
+                      maxLength={60}
+                      value={row.manualName}
+                      onInput={(e) =>
+                        updateRow(row.key, 'manualName', (e.target as HTMLInputElement).value)
+                      }
+                      placeholder={
+                        recordType === 'receivable'
+                          ? 'misal: Pak Joko Bengkel'
+                          : 'misal: Warung Bu Siti'
+                      }
+                    />
+                  </div>
+                )}
 
                 <div class="field">
                   <label for={`amount-${row.key}`}>Nominal (Rp)</label>
@@ -235,30 +373,34 @@ export function CreateDebtForm({ users, loadingUsers, onCreated }: CreateDebtFor
                   </div>
                 )}
               </div>
-            ))}
-          </div>
+            );
+          })}
+        </div>
 
-          {totalPreview > 0 && (
-            <p class="field-hint tabular-num">
-              Total piutang yang akan dicatat: <strong>{formatRupiah(totalPreview)}</strong>
-            </p>
-          )}
+        {totalPreview > 0 && (
+          <p class="field-hint tabular-num">
+            Total nominal yang akan dicatat: <strong>{formatRupiah(totalPreview)}</strong>
+          </p>
+        )}
 
-          <div class="form-actions">
-            <button
-              type="button"
-              class="btn btn-secondary"
-              onClick={addRow}
-              disabled={rows.length >= 20 || submitting}
-            >
-              + Tambah Peminjam
-            </button>
-            <button type="submit" class="btn btn-primary" disabled={submitting}>
-              {submitting ? 'Menyimpan...' : 'Simpan & Kirim Tagihan'}
-            </button>
-          </div>
-        </form>
-      )}
+        <div class="form-actions">
+          <button
+            type="button"
+            class="btn btn-secondary"
+            onClick={addRow}
+            disabled={rows.length >= 20 || submitting}
+          >
+            {recordType === 'receivable' ? '+ Tambah Peminjam' : '+ Tambah Baris'}
+          </button>
+          <button type="submit" class="btn btn-primary" disabled={submitting}>
+            {submitting
+              ? 'Menyimpan...'
+              : recordType === 'receivable'
+                ? 'Simpan Piutang'
+                : 'Simpan Utang Manual'}
+          </button>
+        </div>
+      </form>
     </section>
   );
 }

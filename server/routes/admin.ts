@@ -26,14 +26,17 @@ function parsePositiveId(raw: string): number | null {
 }
 
 function mapDebtRow(row: Row): DebtRecord {
+  const creditorId = row.creditor_id === null ? null : Number(row.creditor_id);
+  const debtorId = row.debtor_id === null ? null : Number(row.debtor_id);
   return {
     id: Number(row.id),
-    creditorId: Number(row.creditor_id),
-    creditorUsername: String(row.creditor_username),
-    creditorName: String(row.creditor_name),
-    debtorId: Number(row.debtor_id),
-    debtorUsername: String(row.debtor_username),
-    debtorName: String(row.debtor_name),
+    creditorId,
+    creditorUsername: row.creditor_username === null ? null : String(row.creditor_username),
+    creditorName: String(row.creditor_name ?? row.creditor_manual_name ?? 'Pemberi Utang'),
+    debtorId,
+    debtorUsername: row.debtor_username === null ? null : String(row.debtor_username),
+    debtorName: String(row.debtor_name ?? row.debtor_manual_name ?? 'Peminjam'),
+    isManual: creditorId === null || debtorId === null,
     amountIdr: Number(row.amount_idr),
     description: String(row.description),
     dueDate: row.due_date === null ? null : String(row.due_date),
@@ -240,9 +243,11 @@ export function createAdminRoutes(db: Client) {
         d.creditor_id,
         c.username AS creditor_username,
         c.display_name AS creditor_name,
+        d.creditor_manual_name,
         d.debtor_id,
         b.username AS debtor_username,
         b.display_name AS debtor_name,
+        d.debtor_manual_name,
         d.amount_idr,
         d.description,
         d.due_date,
@@ -252,8 +257,8 @@ export function createAdminRoutes(db: Client) {
         d.created_at,
         d.updated_at
       FROM debts d
-      JOIN users c ON c.id = d.creditor_id
-      JOIN users b ON b.id = d.debtor_id
+      LEFT JOIN users c ON c.id = d.creditor_id
+      LEFT JOIN users b ON b.id = d.debtor_id
       ${whereClause}
       ORDER BY d.created_at DESC, d.id DESC
       LIMIT 300`,

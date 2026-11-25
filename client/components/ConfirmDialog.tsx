@@ -25,20 +25,26 @@ export function ConfirmDialog({
   children
 }: ConfirmDialogProps) {
   const cardRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
+  // Focus dialog only when transitioning to open so typing in child inputs never loses focus
   useLayoutEffect(() => {
     if (!open) return;
     cardRef.current?.focus();
+  }, [open]);
 
+  useLayoutEffect(() => {
+    if (!open) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape' && !busy) {
         e.preventDefault();
-        onClose();
+        onCloseRef.current();
       }
     }
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [open, busy, onClose]);
+  }, [open, busy]);
 
   if (!open) return null;
 
@@ -47,7 +53,7 @@ export function ConfirmDialog({
       class="dialog-backdrop"
       role="presentation"
       onClick={(e) => {
-        if (e.target === e.currentTarget && !busy) onClose();
+        if (e.target === e.currentTarget && !busy) onCloseRef.current();
       }}
     >
       <div
@@ -62,7 +68,12 @@ export function ConfirmDialog({
         <p class="ledger-desc">{description}</p>
         {children}
         <div class="dialog-actions">
-          <button type="button" class="btn btn-secondary" onClick={onClose} disabled={busy}>
+          <button
+            type="button"
+            class="btn btn-secondary"
+            onClick={() => onCloseRef.current()}
+            disabled={busy}
+          >
             Batal
           </button>
           <button

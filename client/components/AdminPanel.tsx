@@ -329,7 +329,10 @@ export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
                       #{String(item.id).padStart(3, '0')}
                     </span>
                     <span class="ledger-name">
-                      {item.creditorName} (@{item.creditorUsername}) menagih {item.debtorName} (@{item.debtorUsername})
+                      {item.creditorName}
+                      {item.creditorUsername ? ` (@${item.creditorUsername})` : ' (Manual)'} menagih{' '}
+                      {item.debtorName}
+                      {item.debtorUsername ? ` (@${item.debtorUsername})` : ' (Manual)'}
                     </span>
                     <p class="ledger-desc">{item.description}</p>
                   </div>

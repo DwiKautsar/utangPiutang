@@ -5,14 +5,21 @@ import { validateCreateDebtsInput, validatePaymentNote } from '../validators.js'
 import type { AuthEnv } from './auth.js';
 
 function mapDebtRow(row: Row): DebtRecord {
+  const creditorId = row.creditor_id === null ? null : Number(row.creditor_id);
+  const debtorId = row.debtor_id === null ? null : Number(row.debtor_id);
+  const creditorUsername =
+    row.creditor_username === null ? null : String(row.creditor_username);
+  const debtorUsername = row.debtor_username === null ? null : String(row.debtor_username);
+
   return {
     id: Number(row.id),
-    creditorId: Number(row.creditor_id),
-    creditorUsername: String(row.creditor_username),
-    creditorName: String(row.creditor_name),
-    debtorId: Number(row.debtor_id),
-    debtorUsername: String(row.debtor_username),
-    debtorName: String(row.debtor_name),
+    creditorId,
+    creditorUsername,
+    creditorName: String(row.creditor_name ?? row.creditor_manual_name ?? 'Pemberi Utang'),
+    debtorId,
+    debtorUsername,
+    debtorName: String(row.debtor_name ?? row.debtor_manual_name ?? 'Peminjam'),
+    isManual: creditorId === null || debtorId === null,
     amountIdr: Number(row.amount_idr),
     description: String(row.description),
     dueDate: row.due_date === null ? null : String(row.due_date),
@@ -32,6 +39,30 @@ const VALID_STATUS_FILTERS = new Set([
   'paid',
   'cancelled'
 ]);
+
+const SELECT_DEBT_JOIN = `
+  SELECT
+    d.id,
+    d.creditor_id,
+    c.username AS creditor_username,
+    c.display_name AS creditor_name,
+    d.creditor_manual_name,
+    d.debtor_id,
+    b.username AS debtor_username,
+    b.display_name AS debtor_name,
+    d.debtor_manual_name,
+    d.amount_idr,
+    d.description,
+    d.due_date,
+    d.status,
+    d.payment_note,
+    d.paid_at,
+    d.created_at,
+    d.updated_at
+  FROM debts d
+  LEFT JOIN users c ON c.id = d.creditor_id
+  LEFT JOIN users b ON b.id = d.debtor_id
+`;
 
 export function createDebtsRoutes(db: Client) {
   const router = new Hono<AuthEnv>();
@@ -72,25 +103,7 @@ export function createDebtsRoutes(db: Client) {
     const [listRes, summaryRes] = await db.batch(
       [
         {
-          sql: `SELECT
-            d.id,
-            d.creditor_id,
-            c.username AS creditor_username,
-            c.display_name AS creditor_name,
-            d.debtor_id,
-            b.username AS debtor_username,
-            b.display_name AS debtor_name,
-            d.amount_idr,
-            d.description,
-            d.due_date,
-            d.status,
-            d.payment_note,
-            d.paid_at,
-            d.created_at,
-            d.updated_at
-          FROM debts d
-          JOIN users c ON c.id = d.creditor_id
-          JOIN users b ON b.id = d.debtor_id
+          sql: `${SELECT_DEBT_JOIN}
           WHERE ${conditions.join(' AND ')}
           ORDER BY
             CASE d.status
@@ -143,45 +156,60 @@ export function createDebtsRoutes(db: Client) {
     }
 
     const items = validated.data;
-    const uniqueDebtorIds = Array.from(new Set(items.map((item) => item.debtorId)));
+    const linkedDebtorIds = Array.from(
+      new Set(
+        items
+          .filter((item) => item.recordType === 'receivable' && item.debtorId !== null)
+          .map((item) => item.debtorId as number)
+      )
+    );
 
-    for (const debtorId of uniqueDebtorIds) {
+    for (const debtorId of linkedDebtorIds) {
       if (debtorId === user.id) {
         return c.json({ error: 'Tidak bisa mencatat piutang ke akun sendiri.' }, 400);
       }
     }
 
-    const placeholders = uniqueDebtorIds.map(() => '?').join(',');
-    const foundUsers = await db.execute({
-      sql: `SELECT id FROM users WHERE id IN (${placeholders})`,
-      args: uniqueDebtorIds
-    });
+    if (linkedDebtorIds.length > 0) {
+      const placeholders = linkedDebtorIds.map(() => '?').join(',');
+      const foundUsers = await db.execute({
+        sql: `SELECT id, role FROM users WHERE id IN (${placeholders})`,
+        args: linkedDebtorIds
+      });
 
-    if (foundUsers.rows.length !== uniqueDebtorIds.length) {
-      return c.json({ error: 'Salah satu akun peminjam tidak ditemukan.' }, 404);
+      if (foundUsers.rows.length !== linkedDebtorIds.length) {
+        return c.json({ error: 'Salah satu akun peminjam tidak ditemukan.' }, 404);
+      }
+
+      // Enforce server-side policy: admin accounts cannot be tagged as debtors
+      const hasAdminTarget = foundUsers.rows.some((row) => String(row.role) === 'admin');
+      if (hasAdminTarget) {
+        return c.json({ error: 'Akun admin tidak dapat ditagih sebagai peminjam.' }, 400);
+      }
     }
 
-    // Atomic batch write keeps multi-borrower inserts consistent in one round-trip to Turso
     const batchResults = await db.batch(
-      items.map((item) => ({
-        sql: `INSERT INTO debts (creditor_id, debtor_id, amount_idr, description, due_date)
-              VALUES (?, ?, ?, ?, ?)`,
-        args: [user.id, item.debtorId, item.amountIdr, item.description, item.dueDate]
-      })),
+      items.map((item) => {
+        if (item.recordType === 'payable') {
+          return {
+            sql: `INSERT INTO debts (creditor_id, debtor_id, creditor_manual_name, debtor_manual_name, amount_idr, description, due_date)
+                  VALUES (NULL, ?, ?, NULL, ?, ?, ?)`,
+            args: [user.id, item.creditorName, item.amountIdr, item.description, item.dueDate]
+          };
+        }
+        return {
+          sql: `INSERT INTO debts (creditor_id, debtor_id, creditor_manual_name, debtor_manual_name, amount_idr, description, due_date)
+                VALUES (?, ?, NULL, ?, ?, ?, ?)`,
+          args: [user.id, item.debtorId, item.debtorName, item.amountIdr, item.description, item.dueDate]
+        };
+      }),
       'write'
     );
 
     const createdIds = batchResults.map((res) => Number(res.lastInsertRowid));
     const idPlaceholders = createdIds.map(() => '?').join(',');
     const createdRes = await db.execute({
-      sql: `SELECT
-        d.id, d.creditor_id, c.username AS creditor_username, c.display_name AS creditor_name,
-        d.debtor_id, b.username AS debtor_username, b.display_name AS debtor_name,
-        d.amount_idr, d.description, d.due_date, d.status, d.payment_note,
-        d.paid_at, d.created_at, d.updated_at
-      FROM debts d
-      JOIN users c ON c.id = d.creditor_id
-      JOIN users b ON b.id = d.debtor_id
+      sql: `${SELECT_DEBT_JOIN}
       WHERE d.id IN (${idPlaceholders})
       ORDER BY d.id ASC`,
       args: createdIds
@@ -199,8 +227,8 @@ export function createDebtsRoutes(db: Client) {
     if (!row) return undefined;
     return {
       id: Number(row.id),
-      creditor_id: Number(row.creditor_id),
-      debtor_id: Number(row.debtor_id),
+      creditor_id: row.creditor_id === null ? null : Number(row.creditor_id),
+      debtor_id: row.debtor_id === null ? null : Number(row.debtor_id),
       status: String(row.status) as DebtStatus
     };
   }
@@ -217,8 +245,8 @@ export function createDebtsRoutes(db: Client) {
 
     const debt = await findOwnedDebt(debtId);
     if (!debt) return c.json({ error: 'Catatan tidak ditemukan.' }, 404);
-    if (debt.debtor_id !== user.id) {
-      return c.json({ error: 'Hanya peminjam yang dapat menandai pembayaran.' }, 403);
+    if (debt.debtor_id !== user.id || debt.creditor_id === null) {
+      return c.json({ error: 'Hanya peminjam pada tagihan terhubung yang dapat mengajukan konfirmasi bayar.' }, 403);
     }
     if (debt.status !== 'unpaid') {
       return c.json({ error: 'Tagihan ini tidak berada dalam status belum dibayar.' }, 409);
@@ -247,8 +275,12 @@ export function createDebtsRoutes(db: Client) {
 
     const debt = await findOwnedDebt(debtId);
     if (!debt) return c.json({ error: 'Catatan tidak ditemukan.' }, 404);
-    if (debt.creditor_id !== user.id) {
-      return c.json({ error: 'Hanya pemberi utang yang dapat melunaskan catatan ini.' }, 403);
+
+    // Creditor can settle any receivable; debtor can settle only their own manual payable (no creditor account)
+    const canSettle =
+      debt.creditor_id === user.id || (debt.creditor_id === null && debt.debtor_id === user.id);
+    if (!canSettle) {
+      return c.json({ error: 'Hanya pemilik catatan yang dapat melunaskan transaksi ini.' }, 403);
     }
     if (debt.status !== 'unpaid' && debt.status !== 'pending_confirmation') {
       return c.json({ error: 'Catatan ini sudah lunas atau dibatalkan.' }, 409);
@@ -295,8 +327,11 @@ export function createDebtsRoutes(db: Client) {
 
     const debt = await findOwnedDebt(debtId);
     if (!debt) return c.json({ error: 'Catatan tidak ditemukan.' }, 404);
-    if (debt.creditor_id !== user.id) {
-      return c.json({ error: 'Hanya pemberi utang yang dapat membatalkan catatan ini.' }, 403);
+
+    const canCancel =
+      debt.creditor_id === user.id || (debt.creditor_id === null && debt.debtor_id === user.id);
+    if (!canCancel) {
+      return c.json({ error: 'Hanya pemilik catatan yang dapat membatalkan transaksi ini.' }, 403);
     }
     if (debt.status !== 'unpaid' && debt.status !== 'pending_confirmation') {
       return c.json({ error: 'Catatan yang sudah lunas atau batal tidak dapat dibatalkan lagi.' }, 409);

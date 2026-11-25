@@ -58,7 +58,10 @@ export function validateLoginInput(body: unknown): ValidationResult<{
 }
 
 export interface CreateDebtItemInput {
-  debtorId: number;
+  recordType: 'receivable' | 'payable';
+  debtorId: number | null;
+  debtorName: string | null;
+  creditorName: string | null;
   amountIdr: number;
   description: string;
   dueDate: string | null;
@@ -66,33 +69,30 @@ export interface CreateDebtItemInput {
 
 export function validateCreateDebtsInput(body: unknown): ValidationResult<CreateDebtItemInput[]> {
   if (!body || typeof body !== 'object') {
-    return { ok: false, error: 'Format data piutang tidak valid.' };
+    return { ok: false, error: 'Format data catatan tidak valid.' };
   }
   const raw = body as Record<string, unknown>;
   const itemsRaw = Array.isArray(raw.items) ? raw.items : [raw];
 
   if (itemsRaw.length === 0) {
-    return { ok: false, error: 'Minimal pilih satu peminjam.' };
+    return { ok: false, error: 'Minimal isi satu baris catatan.' };
   }
   if (itemsRaw.length > MAX_BATCH_ITEMS) {
-    return { ok: false, error: `Maksimal ${MAX_BATCH_ITEMS} peminjam dalam satu pencatatan.` };
+    return { ok: false, error: `Maksimal ${MAX_BATCH_ITEMS} baris dalam satu pencatatan.` };
   }
 
   const parsed: CreateDebtItemInput[] = [];
   for (let i = 0; i < itemsRaw.length; i += 1) {
     const item = itemsRaw[i];
     if (!item || typeof item !== 'object') {
-      return { ok: false, error: `Baris peminjam ke-${i + 1} tidak valid.` };
+      return { ok: false, error: `Baris ke-${i + 1} tidak valid.` };
     }
     const row = item as Record<string, unknown>;
-    const debtorId = Number(row.debtorId);
+    const recordType = row.recordType === 'payable' ? 'payable' : 'receivable';
     const amountIdr = Number(row.amountIdr);
     const description = typeof row.description === 'string' ? row.description.trim() : '';
     const dueDateRaw = typeof row.dueDate === 'string' ? row.dueDate.trim() : '';
 
-    if (!Number.isInteger(debtorId) || debtorId <= 0) {
-      return { ok: false, error: `Peminjam pada baris ke-${i + 1} belum dipilih.` };
-    }
     if (!Number.isInteger(amountIdr) || amountIdr <= 0 || amountIdr > MAX_AMOUNT_IDR) {
       return {
         ok: false,
@@ -112,12 +112,60 @@ export function validateCreateDebtsInput(body: unknown): ValidationResult<Create
       };
     }
 
-    parsed.push({
-      debtorId,
-      amountIdr,
-      description,
-      dueDate: dueDateRaw || null
-    });
+    if (recordType === 'payable') {
+      const creditorName = typeof row.creditorName === 'string' ? row.creditorName.trim() : '';
+      if (creditorName.length < 2 || creditorName.length > 60) {
+        return {
+          ok: false,
+          error: `Nama pemberi utang pada baris ke-${i + 1} harus 2 sampai 60 karakter.`
+        };
+      }
+      parsed.push({
+        recordType: 'payable',
+        debtorId: null,
+        debtorName: null,
+        creditorName,
+        amountIdr,
+        description,
+        dueDate: dueDateRaw || null
+      });
+    } else {
+      const hasDebtorId =
+        row.debtorId !== undefined && row.debtorId !== null && String(row.debtorId).trim() !== '';
+      const debtorId = hasDebtorId ? Number(row.debtorId) : null;
+      const debtorName = typeof row.debtorName === 'string' ? row.debtorName.trim() : '';
+
+      if (debtorId !== null) {
+        if (!Number.isInteger(debtorId) || debtorId <= 0) {
+          return { ok: false, error: `Akun peminjam pada baris ke-${i + 1} tidak valid.` };
+        }
+        parsed.push({
+          recordType: 'receivable',
+          debtorId,
+          debtorName: null,
+          creditorName: null,
+          amountIdr,
+          description,
+          dueDate: dueDateRaw || null
+        });
+      } else {
+        if (debtorName.length < 2 || debtorName.length > 60) {
+          return {
+            ok: false,
+            error: `Pilih akun peminjam atau isi nama peminjam (2 sampai 60 karakter) pada baris ke-${i + 1}.`
+          };
+        }
+        parsed.push({
+          recordType: 'receivable',
+          debtorId: null,
+          debtorName,
+          creditorName: null,
+          amountIdr,
+          description,
+          dueDate: dueDateRaw || null
+        });
+      }
+    }
   }
 
   return { ok: true, data: parsed };

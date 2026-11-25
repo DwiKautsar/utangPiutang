@@ -180,16 +180,21 @@ export function DebtLedger({
         <ul class="ledger-list">
           {items.map((item) => {
             const isDebtorView = role === 'debtor';
+            const isManualPayable = isDebtorView && item.creditorId === null;
             const counterpartyLabel = isDebtorView
-              ? `Bayar ke ${item.creditorName} (@${item.creditorUsername})`
-              : `Peminjam: ${item.debtorName} (@${item.debtorUsername})`;
+              ? item.creditorUsername
+                ? `Bayar ke ${item.creditorName} (@${item.creditorUsername})`
+                : `Bayar ke ${item.creditorName} (Tanpa Akun)`
+              : item.debtorUsername
+                ? `Peminjam: ${item.debtorName} (@${item.debtorUsername})`
+                : `Peminjam: ${item.debtorName} (Tanpa Akun)`;
 
             return (
               <li class="ledger-item" key={item.id}>
                 <div class="ledger-item-top">
                   <div class="ledger-counterparty">
                     <span class="ledger-code tabular-num">
-                      #{String(item.id).padStart(3, '0')}
+                      #{String(item.id).padStart(3, '0')} {item.isManual ? '| Catatan Manual' : ''}
                     </span>
                     <span class="ledger-name">{counterpartyLabel}</span>
                     <p class="ledger-desc">{item.description}</p>
@@ -216,7 +221,7 @@ export function DebtLedger({
                 )}
 
                 <div class="ledger-actions">
-                  {isDebtorView && item.status === 'unpaid' && (
+                  {isDebtorView && !isManualPayable && item.status === 'unpaid' && (
                     <button
                       type="button"
                       class="btn btn-primary btn-sm"
@@ -224,6 +229,25 @@ export function DebtLedger({
                     >
                       Tandai Sudah Bayar
                     </button>
+                  )}
+
+                  {isManualPayable && item.status === 'unpaid' && (
+                    <>
+                      <button
+                        type="button"
+                        class="btn btn-credit btn-sm"
+                        onClick={() => openAction({ type: 'confirm', item })}
+                      >
+                        Tandai Lunas
+                      </button>
+                      <button
+                        type="button"
+                        class="btn btn-ghost btn-sm"
+                        onClick={() => openAction({ type: 'cancel', item })}
+                      >
+                        Batalkan
+                      </button>
+                    </>
                   )}
 
                   {!isDebtorView && item.status === 'pending_confirmation' && (

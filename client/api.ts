@@ -29,12 +29,13 @@ export type DebtStatus = 'unpaid' | 'pending_confirmation' | 'paid' | 'cancelled
 
 export interface DebtItem {
   id: number;
-  creditorId: number;
-  creditorUsername: string;
+  creditorId: number | null;
+  creditorUsername: string | null;
   creditorName: string;
-  debtorId: number;
-  debtorUsername: string;
+  debtorId: number | null;
+  debtorUsername: string | null;
   debtorName: string;
+  isManual: boolean;
   amountIdr: number;
   description: string;
   dueDate: string | null;
@@ -43,6 +44,16 @@ export interface DebtItem {
   paidAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CreateDebtPayloadItem {
+  recordType: 'receivable' | 'payable';
+  debtorId?: number;
+  debtorName?: string;
+  creditorName?: string;
+  amountIdr: number;
+  description: string;
+  dueDate?: string;
 }
 
 export interface DebtSummary {
@@ -119,9 +130,7 @@ export const api = {
     return request<{ summary: DebtSummary; items: DebtItem[] }>(`/api/debts?${query.toString()}`);
   },
 
-  createDebts: (
-    items: Array<{ debtorId: number; amountIdr: number; description: string; dueDate?: string }>
-  ) =>
+  createDebts: (items: CreateDebtPayloadItem[]) =>
     request<{ items: DebtItem[] }>('/api/debts', {
       method: 'POST',
       body: JSON.stringify({ items })

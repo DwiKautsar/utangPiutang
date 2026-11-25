@@ -285,3 +285,82 @@ test('RBAC Admin: proteksi 403 user biasa, kelola akun, reset password, dan mode
     db.close();
   }
 });
+
+test('Revisi: admin tidak bisa ditagih & catatan piutang/utang manual tanpa akun berfungsi', async () => {
+  const db = createDatabase({ url: ':memory:' });
+  const { app } = createApp({ db, enableRateLimit: false });
+
+  try {
+    // User pertama otomatis admin, user kedua user biasa
+    const regAdmin = await jsonRequest(app, '/api/auth/register', {
+      method: 'POST',
+      body: { username: 'bos_admin', displayName: 'Bos Admin', password: 'password123' }
+    });
+    const adminUser = ((await regAdmin.json()) as { user: { id: number } }).user;
+
+    const regMember = await jsonRequest(app, '/api/auth/register', {
+      method: 'POST',
+      body: { username: 'rina', displayName: 'Rina Sari', password: 'password123' }
+    });
+    const memberCookie = extractCookie(regMember);
+
+    // 1. Admin tidak muncul di GET /api/users untuk ditagih
+    const usersRes = await jsonRequest(app, '/api/users', { cookie: memberCookie });
+    const usersData = (await usersRes.json()) as { users: Array<{ id: number }> };
+    assert.equal(
+      usersData.users.some((u) => u.id === adminUser.id),
+      false
+    );
+
+    // 2. Menagih admin secara langsung lewat API ditolak (400)
+    const tagAdminRes = await jsonRequest(app, '/api/debts', {
+      method: 'POST',
+      cookie: memberCookie,
+      body: {
+        items: [{ recordType: 'receivable', debtorId: adminUser.id, amountIdr: 10000, description: 'Coba tagih admin' }]
+      }
+    });
+    assert.equal(tagAdminRes.status, 400);
+
+    // 3. Catat piutang manual ke orang tanpa akun
+    const manualRecRes = await jsonRequest(app, '/api/debts', {
+      method: 'POST',
+      cookie: memberCookie,
+      body: {
+        items: [{ recordType: 'receivable', debtorName: 'Pak Joko Bengkel', amountIdr: 60000, description: 'Pinjam beli oli' }]
+      }
+    });
+    assert.equal(manualRecRes.status, 201);
+    const manualRec = ((await manualRecRes.json()) as {
+      items: Array<{ id: number; debtorId: number | null; debtorName: string; isManual: boolean }>;
+    }).items[0];
+    assert.equal(manualRec.debtorId, null);
+    assert.equal(manualRec.debtorName, 'Pak Joko Bengkel');
+    assert.equal(manualRec.isManual, true);
+
+    // 4. Catat utang manual ke pihak luar tanpa akun & lunaskan sendiri
+    const manualPayRes = await jsonRequest(app, '/api/debts', {
+      method: 'POST',
+      cookie: memberCookie,
+      body: {
+        items: [{ recordType: 'payable', creditorName: 'Warung Bu Siti', amountIdr: 20000, description: 'Beli galon & telur' }]
+      }
+    });
+    assert.equal(manualPayRes.status, 201);
+    const manualPay = ((await manualPayRes.json()) as {
+      items: Array<{ id: number; creditorId: number | null; creditorName: string; isManual: boolean }>;
+    }).items[0];
+    assert.equal(manualPay.creditorId, null);
+    assert.equal(manualPay.creditorName, 'Warung Bu Siti');
+    assert.equal(manualPay.isManual, true);
+
+    // Pencatat utang manual boleh langsung menandai lunas
+    const settleManualPay = await jsonRequest(app, `/api/debts/${manualPay.id}/confirm`, {
+      method: 'PATCH',
+      cookie: memberCookie
+    });
+    assert.equal(settleManualPay.status, 200);
+  } finally {
+    db.close();
+  }
+});
