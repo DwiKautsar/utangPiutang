@@ -30,6 +30,7 @@ function mapDebtRow(row: Row): DebtRecord {
   const debtorId = row.debtor_id === null ? null : Number(row.debtor_id);
   return {
     id: Number(row.id),
+    displayNumber: Number(row.display_number ?? row.id),
     creditorId,
     creditorUsername: row.creditor_username === null ? null : String(row.creditor_username),
     creditorName: String(row.creditor_name ?? row.creditor_manual_name ?? 'Pemberi Utang'),
@@ -238,8 +239,13 @@ export function createAdminRoutes(db: Client) {
     }
 
     const res = await db.execute({
-      sql: `SELECT
+      sql: `WITH numbered_debts AS (
+        SELECT d.*, ROW_NUMBER() OVER (ORDER BY d.created_at ASC, d.id ASC) AS display_number
+        FROM debts d
+      )
+      SELECT
         d.id,
+        d.display_number,
         d.creditor_id,
         c.username AS creditor_username,
         c.display_name AS creditor_name,
@@ -256,7 +262,7 @@ export function createAdminRoutes(db: Client) {
         d.paid_at,
         d.created_at,
         d.updated_at
-      FROM debts d
+      FROM numbered_debts d
       LEFT JOIN users c ON c.id = d.creditor_id
       LEFT JOIN users b ON b.id = d.debtor_id
       ${whereClause}
@@ -325,6 +331,183 @@ export function createAdminRoutes(db: Client) {
     });
 
     return c.json({ ok: true });
+  });
+
+  function parseArchiveMonths(raw: string | undefined): number {
+    const num = Number(raw ?? 3);
+    if (!Number.isInteger(num) || num < 1 || num > 24) return 3;
+    return num;
+  }
+
+  // Mitigate Excel/CSV Formula Injection (OWASP) by neutralizing leading formula characters
+  function escapeCsvCell(value: string | number | null | undefined): string {
+    const raw = value === null || value === undefined ? '' : String(value);
+    const neutralized = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+    const escaped = neutralized.replace(/"/g, '""');
+    return `"${escaped}"`;
+  }
+
+  const STATUS_TEXT_ID: Record<DebtStatus, string> = {
+    unpaid: 'Belum Dibayar',
+    pending_confirmation: 'Menunggu Konfirmasi',
+    paid: 'Lunas',
+    cancelled: 'Dibatalkan'
+  };
+
+  router.get('/archive/preview', async (c) => {
+    const months = parseArchiveMonths(c.req.query('months'));
+    const includeUnpaid = c.req.query('includeUnpaid') === '1';
+    const statusClause = includeUnpaid ? '' : "AND status IN ('paid', 'cancelled')";
+
+    const res = await db.execute({
+      sql: `SELECT
+              COUNT(*) AS total_count,
+              COALESCE(SUM(amount_idr), 0) AS total_amount
+            FROM debts
+            WHERE created_at <= datetime('now', ?) ${statusClause}`,
+      args: [`-${months} months`]
+    });
+
+    const row = res.rows[0];
+    return c.json({
+      preview: {
+        months,
+        includeUnpaid,
+        count: Number(row?.total_count ?? 0),
+        totalAmountIdr: Number(row?.total_amount ?? 0)
+      }
+    });
+  });
+
+  router.get('/archive/export', async (c) => {
+    const scope = c.req.query('scope') === 'all' ? 'all' : 'archive';
+    const months = parseArchiveMonths(c.req.query('months'));
+    const includeUnpaid = c.req.query('includeUnpaid') === '1';
+
+    let whereClause = '';
+    const args: Array<string | number> = [];
+
+    if (scope === 'archive') {
+      whereClause = includeUnpaid
+        ? "WHERE d.created_at <= datetime('now', ?)"
+        : "WHERE d.created_at <= datetime('now', ?) AND d.status IN ('paid', 'cancelled')";
+      args.push(`-${months} months`);
+    }
+
+    const res = await db.execute({
+      sql: `WITH numbered_debts AS (
+        SELECT d.*, ROW_NUMBER() OVER (ORDER BY d.created_at ASC, d.id ASC) AS display_number
+        FROM debts d
+      )
+      SELECT
+        d.id,
+        d.display_number,
+        d.creditor_id,
+        c.username AS creditor_username,
+        c.display_name AS creditor_name,
+        d.creditor_manual_name,
+        d.debtor_id,
+        b.username AS debtor_username,
+        b.display_name AS debtor_name,
+        d.debtor_manual_name,
+        d.amount_idr,
+        d.description,
+        d.due_date,
+        d.status,
+        d.payment_note,
+        d.paid_at,
+        d.created_at,
+        d.updated_at
+      FROM numbered_debts d
+      LEFT JOIN users c ON c.id = d.creditor_id
+      LEFT JOIN users b ON b.id = d.debtor_id
+      ${whereClause}
+      ORDER BY d.created_at ASC, d.id ASC`,
+      args
+    });
+
+    const header = [
+      'No',
+      'Tanggal Catat',
+      'Pemberi Utang',
+      'Peminjam',
+      'Nominal (Rp)',
+      'Keterangan',
+      'Jatuh Tempo',
+      'Status',
+      'Catatan Pembayaran',
+      'Tanggal Lunas'
+    ];
+
+    const lines = [header.map(escapeCsvCell).join(',')];
+    for (const row of res.rows) {
+      const item = mapDebtRow(row);
+      const creditorLabel = item.creditorUsername
+        ? `${item.creditorName} (@${item.creditorUsername})`
+        : `${item.creditorName} (Manual)`;
+      const debtorLabel = item.debtorUsername
+        ? `${item.debtorName} (@${item.debtorUsername})`
+        : `${item.debtorName} (Manual)`;
+
+      lines.push(
+        [
+          `#${String(item.displayNumber).padStart(3, '0')}`,
+          item.createdAt,
+          creditorLabel,
+          debtorLabel,
+          item.amountIdr,
+          item.description,
+          item.dueDate ?? '-',
+          STATUS_TEXT_ID[item.status] ?? item.status,
+          item.paymentNote ?? '-',
+          item.paidAt ?? '-'
+        ]
+          .map(escapeCsvCell)
+          .join(',')
+      );
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const filename =
+      scope === 'all'
+        ? `bukuutang-semua-${today}.csv`
+        : `bukuutang-arsip-${months}bulan-${today}.csv`;
+
+    // UTF-8 BOM ensures Microsoft Excel opens Indonesian characters cleanly
+    const csvContent = `\uFEFF${lines.join('\r\n')}\r\n`;
+    return new Response(csvContent, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Cache-Control': 'no-store'
+      }
+    });
+  });
+
+  router.post('/archive/purge', async (c) => {
+    const body = (await c.req.json().catch(() => null)) as {
+      months?: unknown;
+      includeUnpaid?: unknown;
+    } | null;
+
+    const months = parseArchiveMonths(
+      body?.months !== undefined ? String(body.months) : undefined
+    );
+    const includeUnpaid = body?.includeUnpaid === true;
+    const statusClause = includeUnpaid ? '' : "AND status IN ('paid', 'cancelled')";
+
+    const delRes = await db.execute({
+      sql: `DELETE FROM debts WHERE created_at <= datetime('now', ?) ${statusClause}`,
+      args: [`-${months} months`]
+    });
+
+    return c.json({
+      ok: true,
+      deletedCount: Number(delRes.rowsAffected ?? 0),
+      months,
+      includeUnpaid
+    });
   });
 
   return router;

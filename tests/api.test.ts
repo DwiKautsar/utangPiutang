@@ -388,3 +388,85 @@ test('Revisi: admin tidak bisa ditagih & catatan piutang/utang manual tanpa akun
     db.close();
   }
 });
+
+test('Arsip Excel 3 bulanan, proteksi CSV formula injection, dan penomoran ulang displayNumber', async () => {
+  const db = createDatabase({ url: ':memory:' });
+  const { app } = createApp({ db, enableRateLimit: false });
+
+  try {
+    const regAdmin = await jsonRequest(app, '/api/auth/register', {
+      method: 'POST',
+      body: { username: 'admin_arsip', displayName: 'Admin Arsip', password: 'password123' }
+    });
+    const adminCookie = extractCookie(regAdmin);
+
+    // Buat 3 catatan: #1 (4 bulan lalu, lunas, deskripsi formula injection), #2 (4 bulan lalu, belum lunas), #3 (hari ini)
+    const createRes = await jsonRequest(app, '/api/debts', {
+      method: 'POST',
+      cookie: adminCookie,
+      body: {
+        items: [
+          { recordType: 'receivable', debtorName: 'Pelanggan Lama', amountIdr: 100000, description: '=CMD|calc' },
+          { recordType: 'receivable', debtorName: 'Pelanggan Belum Bayar', amountIdr: 50000, description: 'Masih jalan' },
+          { recordType: 'receivable', debtorName: 'Pelanggan Baru', amountIdr: 25000, description: 'Transaksi baru' }
+        ]
+      }
+    });
+    assert.equal(createRes.status, 201);
+    const created = ((await createRes.json()) as { items: Array<{ id: number; displayNumber: number }> }).items;
+    assert.deepEqual(
+      created.map((i) => i.displayNumber),
+      [1, 2, 3]
+    );
+
+    // Tandai #1 lunas dan mundurkan tanggal #1 dan #2 menjadi 4 bulan lalu
+    await jsonRequest(app, `/api/admin/debts/${created[0].id}/status`, {
+      method: 'PATCH',
+      cookie: adminCookie,
+      body: { status: 'paid' }
+    });
+    await db.execute({
+      sql: "UPDATE debts SET created_at = datetime('now', '-4 months') WHERE id IN (?, ?)",
+      args: [created[0].id, created[1].id]
+    });
+
+    // Preview default (includeUnpaid=0) hanya menghitung 1 catatan (#1 yang sudah lunas > 3 bulan)
+    const prevRes = await jsonRequest(app, '/api/admin/archive/preview?months=3&includeUnpaid=0', {
+      cookie: adminCookie
+    });
+    const prevData = (await prevRes.json()) as { preview: { count: number; totalAmountIdr: number } };
+    assert.equal(prevData.preview.count, 1);
+    assert.equal(prevData.preview.totalAmountIdr, 100000);
+
+    // Export CSV memproteksi formula injection (=CMD|calc -> '=CMD|calc)
+    const exportRes = await jsonRequest(app, '/api/admin/archive/export?scope=archive&months=3&includeUnpaid=0', {
+      cookie: adminCookie
+    });
+    assert.equal(exportRes.status, 200);
+    const csvText = await exportRes.text();
+    assert.ok(csvText.includes('"\'=CMD|calc"'));
+    assert.ok(!csvText.includes('"=CMD|calc"'));
+
+    // Purge default hanya menghapus #1, mempertahankan #2 (unpaid) & #3 (baru)
+    const purgeRes = await jsonRequest(app, '/api/admin/archive/purge', {
+      method: 'POST',
+      cookie: adminCookie,
+      body: { months: 3, includeUnpaid: false }
+    });
+    const purgeData = (await purgeRes.json()) as { deletedCount: number };
+    assert.equal(purgeData.deletedCount, 1);
+
+    // Sisa 2 catatan otomatis terurut ulang displayNumber menjadi 1 dan 2 (tidak bolong)
+    const remainingRes = await jsonRequest(app, '/api/admin/debts?status=all', {
+      cookie: adminCookie
+    });
+    const remaining = ((await remainingRes.json()) as { items: Array<{ displayNumber: number }> }).items;
+    assert.equal(remaining.length, 2);
+    assert.deepEqual(
+      remaining.map((i) => i.displayNumber).sort((a, b) => a - b),
+      [1, 2]
+    );
+  } finally {
+    db.close();
+  }
+});

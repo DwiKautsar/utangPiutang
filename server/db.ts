@@ -15,6 +15,7 @@ export type DebtStatus = 'unpaid' | 'pending_confirmation' | 'paid' | 'cancelled
 
 export interface DebtRecord {
   id: number;
+  displayNumber: number;
   creditorId: number | null;
   creditorUsername: string | null;
   creditorName: string;

@@ -13,6 +13,7 @@ function mapDebtRow(row: Row): DebtRecord {
 
   return {
     id: Number(row.id),
+    displayNumber: Number(row.display_number ?? row.id),
     creditorId,
     creditorUsername,
     creditorName: String(row.creditor_name ?? row.creditor_manual_name ?? 'Pemberi Utang'),
@@ -41,8 +42,13 @@ const VALID_STATUS_FILTERS = new Set([
 ]);
 
 const SELECT_DEBT_JOIN = `
+  WITH numbered_debts AS (
+    SELECT d.*, ROW_NUMBER() OVER (ORDER BY d.created_at ASC, d.id ASC) AS display_number
+    FROM debts d
+  )
   SELECT
     d.id,
+    d.display_number,
     d.creditor_id,
     c.username AS creditor_username,
     c.display_name AS creditor_name,
@@ -59,7 +65,7 @@ const SELECT_DEBT_JOIN = `
     d.paid_at,
     d.created_at,
     d.updated_at
-  FROM debts d
+  FROM numbered_debts d
   LEFT JOIN users c ON c.id = d.creditor_id
   LEFT JOIN users b ON b.id = d.debtor_id
 `;

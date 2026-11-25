@@ -93,6 +93,49 @@
   min-width: 190px;
 }
 
+.archive-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.archive-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.archive-info h2 {
+  font-size: 1.2rem;
+}
+
+.archive-info p {
+  font-size: 0.9rem;
+  color: var(--ink-secondary);
+}
+
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  font-size: 0.875rem;
+  color: var(--ink-primary);
+}
+
+.checkbox-row input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent-debt);
+  flex-shrink: 0;
+}
+
+.archive-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 /* Buttons */
 .btn {
   display: inline-flex;

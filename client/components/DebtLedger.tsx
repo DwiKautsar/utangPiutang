@@ -194,7 +194,7 @@ export function DebtLedger({
                 <div class="ledger-item-top">
                   <div class="ledger-counterparty">
                     <span class="ledger-code tabular-num">
-                      #{String(item.id).padStart(3, '0')} {item.isManual ? '| Catatan Manual' : ''}
+                      #{String(item.displayNumber).padStart(3, '0')} {item.isManual ? '| Catatan Manual' : ''}
                     </span>
                     <span class="ledger-name">{counterpartyLabel}</span>
                     <p class="ledger-desc">{item.description}</p>

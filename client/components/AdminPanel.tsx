@@ -6,6 +6,7 @@ import {
   formatRupiah,
   type AdminOverview,
   type AdminUserItem,
+  type ArchivePreview,
   type DebtItem,
   type DebtStatus,
   type UserProfile
@@ -27,11 +28,14 @@ const STATUS_LABELS: Record<DebtStatus, string> = {
 type AdminDialogAction =
   | { type: 'reset-password'; target: AdminUserItem }
   | { type: 'delete-user'; target: AdminUserItem }
-  | { type: 'delete-debt'; target: DebtItem };
+  | { type: 'delete-debt'; target: DebtItem }
+  | { type: 'archive-purge' };
 
 export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
   const [tab, setTab] = useState<'users' | 'debts'>('users');
   const [overview, setOverview] = useState<AdminOverview | null>(null);
+  const [archivePreview, setArchivePreview] = useState<ArchivePreview | null>(null);
+  const [includeUnpaidArchive, setIncludeUnpaidArchive] = useState(false);
   const [users, setUsers] = useState<AdminUserItem[]>([]);
   const [debts, setDebts] = useState<DebtItem[]>([]);
   const [debtFilter, setDebtFilter] = useState('all');
@@ -49,20 +53,22 @@ export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
     setLoading(true);
     setError(null);
     try {
-      const [ovRes, usersRes, debtsRes] = await Promise.all([
+      const [ovRes, usersRes, debtsRes, prevRes] = await Promise.all([
         api.adminOverview(),
         api.adminListUsers(),
-        api.adminListDebts(debtFilter)
+        api.adminListDebts(debtFilter),
+        api.adminArchivePreview(3, includeUnpaidArchive)
       ]);
       setOverview(ovRes.overview);
       setUsers(usersRes.users);
       setDebts(debtsRes.items);
+      setArchivePreview(prevRes.preview);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Gagal memuat data panel admin.');
     } finally {
       setLoading(false);
     }
-  }, [debtFilter]);
+  }, [debtFilter, includeUnpaidArchive]);
 
   useEffect(() => {
     loadAll();
@@ -91,11 +97,25 @@ export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
     setError(null);
     try {
       await api.adminUpdateDebtStatus(item.id, nextStatus);
-      setFeedback(`Status transaksi #${String(item.id).padStart(3, '0')} diubah ke ${STATUS_LABELS[nextStatus]}.`);
+      setFeedback(`Status transaksi #${String(item.displayNumber).padStart(3, '0')} diubah ke ${STATUS_LABELS[nextStatus]}.`);
       await loadAll();
       await onDataChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Gagal memperbarui status transaksi.');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleExportAllExcel() {
+    setBusyId('export-all');
+    setFeedback(null);
+    setError(null);
+    try {
+      const filename = await api.adminDownloadArchiveCsv({ scope: 'all' });
+      setFeedback(`File laporan Excel (${filename}) berhasil diunduh.`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Gagal mengunduh file Excel.');
     } finally {
       setBusyId(null);
     }
@@ -120,7 +140,17 @@ export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
         setFeedback(`Akun @${dialog.target.username} beserta catatan terkait telah dihapus.`);
       } else if (dialog.type === 'delete-debt') {
         await api.adminDeleteDebt(dialog.target.id);
-        setFeedback(`Catatan transaksi #${String(dialog.target.id).padStart(3, '0')} telah dihapus.`);
+        setFeedback(`Catatan transaksi #${String(dialog.target.displayNumber).padStart(3, '0')} dihapus dan nomor urut otomatis dirapikan.`);
+      } else if (dialog.type === 'archive-purge') {
+        const filename = await api.adminDownloadArchiveCsv({
+          scope: 'archive',
+          months: 3,
+          includeUnpaid: includeUnpaidArchive
+        });
+        const purgeRes = await api.adminPurgeArchive(3, includeUnpaidArchive);
+        setFeedback(
+          `Arsip (${filename}) berhasil diunduh. ${purgeRes.deletedCount} catatan > 3 bulan telah dibersihkan dan nomor urut otomatis dirapikan.`
+        );
       }
       setDialog(null);
       setNewPassword('');
@@ -156,10 +186,55 @@ export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
           </div>
 
           <div class="metric-block">
-            <span class="summary-label">Kontrol Moderasi</span>
-            <span class="metric-value">Aktif</span>
-            <span class="metric-sub">Kelola role, reset password, dan status transaksi</span>
+            <span class="summary-label">Arsip Berkala (&gt; 3 Bulan)</span>
+            <span class="metric-value tabular-num">{archivePreview?.count ?? 0} catatan</span>
+            <span class="metric-sub">
+              {archivePreview && archivePreview.count > 0
+                ? `Total ${formatRupiah(archivePreview.totalAmountIdr)} siap diarsipkan ke Excel`
+                : 'Belum ada catatan lebih dari 3 bulan untuk diarsipkan'}
+            </span>
           </div>
+        </div>
+      </section>
+
+      <section class="panel archive-bar" aria-labelledby="archive-heading">
+        <div class="archive-info">
+          <h2 id="archive-heading">Arsip Excel 3 Bulanan &amp; Pembersihan</h2>
+          <p>
+            Unduh catatan lama ke file Excel (CSV), lalu bersihkan dari web. Penomoran #001, #002,
+            dst. akan otomatis terurut ulang setelah pembersihan.
+          </p>
+          <label class="checkbox-row" for="include-unpaid-archive">
+            <input
+              id="include-unpaid-archive"
+              type="checkbox"
+              checked={includeUnpaidArchive}
+              onChange={(e) => setIncludeUnpaidArchive((e.target as HTMLInputElement).checked)}
+            />
+            <span>Sertakan juga catatan &gt; 3 bulan yang masih belum lunas (default: hanya Lunas/Dibatalkan)</span>
+          </label>
+        </div>
+
+        <div class="archive-actions">
+          <button
+            type="button"
+            class="btn btn-secondary btn-sm"
+            disabled={busyId === 'export-all'}
+            onClick={handleExportAllExcel}
+          >
+            {busyId === 'export-all' ? 'Mengunduh...' : 'Unduh Excel (Semua Data)'}
+          </button>
+          <button
+            type="button"
+            class="btn btn-primary btn-sm"
+            disabled={!archivePreview || archivePreview.count === 0}
+            onClick={() => {
+              setDialog({ type: 'archive-purge' });
+              setDialogError(null);
+            }}
+          >
+            Unduh Excel &amp; Bersihkan (&gt; 3 Bulan)
+          </button>
         </div>
       </section>
 
@@ -326,7 +401,7 @@ export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
                 <div class="ledger-item-top">
                   <div class="ledger-counterparty">
                     <span class="ledger-code tabular-num">
-                      #{String(item.id).padStart(3, '0')}
+                      #{String(item.displayNumber).padStart(3, '0')}
                     </span>
                     <span class="ledger-name">
                       {item.creditorName}
@@ -401,23 +476,29 @@ export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
             ? `Reset Password @${dialog.target.username}`
             : dialog?.type === 'delete-user'
               ? `Hapus Akun @${dialog.target.username}`
-              : 'Hapus Catatan Utang Piutang'
+              : dialog?.type === 'archive-purge'
+                ? 'Unduh Arsip Excel & Bersihkan Data > 3 Bulan'
+                : 'Hapus Catatan Utang Piutang'
         }
         description={
           dialog?.type === 'reset-password'
             ? 'Masukkan password baru untuk akun ini. Semua sesi login lama milik akun ini akan langsung dikeluarkan.'
             : dialog?.type === 'delete-user'
               ? `Akun ${dialog.target.displayName} (@${dialog.target.username}) beserta seluruh catatan utang piutang yang terkait akan dihapus permanen.`
-              : dialog
-                ? `Hapus catatan #${String(dialog.target.id).padStart(3, '0')} (${formatRupiah(dialog.target.amountIdr)}) secara permanen?`
-                : ''
+              : dialog?.type === 'archive-purge'
+                ? `Sistem akan mengunduh ${archivePreview?.count ?? 0} catatan berumur lebih dari 3 bulan (${includeUnpaidArchive ? 'semua status' : 'hanya Lunas/Dibatalkan'}) ke file Excel, lalu menghapusnya dari database dan mengurutkan ulang penomoran #.`
+                : dialog
+                  ? `Hapus catatan #${String(dialog.target.displayNumber).padStart(3, '0')} (${formatRupiah(dialog.target.amountIdr)}) secara permanen? Nomor urut sisa catatan akan dirapikan otomatis.`
+                  : ''
         }
         confirmLabel={
           dialog?.type === 'reset-password'
             ? 'Simpan Password Baru'
             : dialog?.type === 'delete-user'
               ? 'Ya, Hapus Akun'
-              : 'Ya, Hapus Catatan'
+              : dialog?.type === 'archive-purge'
+                ? 'Unduh Excel & Hapus Data Lama'
+                : 'Ya, Hapus Catatan'
         }
         confirmVariant={dialog?.type === 'reset-password' ? 'credit' : 'primary'}
         busy={busyId === 'dialog'}

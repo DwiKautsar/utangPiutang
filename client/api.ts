@@ -25,10 +25,18 @@ export interface AdminOverview {
   paidDebtCount: number;
 }
 
+export interface ArchivePreview {
+  months: number;
+  includeUnpaid: boolean;
+  count: number;
+  totalAmountIdr: number;
+}
+
 export type DebtStatus = 'unpaid' | 'pending_confirmation' | 'paid' | 'cancelled';
 
 export interface DebtItem {
   id: number;
+  displayNumber: number;
   creditorId: number | null;
   creditorUsername: string | null;
   creditorName: string;
@@ -192,6 +200,54 @@ export const api = {
   adminDeleteDebt: (id: number) =>
     request<{ ok: boolean }>(`/api/admin/debts/${id}`, {
       method: 'DELETE'
+    }),
+
+  adminArchivePreview: (months = 3, includeUnpaid = false) =>
+    request<{ preview: ArchivePreview }>(
+      `/api/admin/archive/preview?months=${months}&includeUnpaid=${includeUnpaid ? '1' : '0'}`
+    ),
+
+  adminDownloadArchiveCsv: async (options: {
+    scope: 'archive' | 'all';
+    months?: number;
+    includeUnpaid?: boolean;
+  }) => {
+    const query = new URLSearchParams({
+      scope: options.scope,
+      months: String(options.months ?? 3),
+      includeUnpaid: options.includeUnpaid ? '1' : '0'
+    });
+    const res = await fetch(`/api/admin/archive/export?${query.toString()}`, {
+      credentials: 'same-origin',
+      headers: { 'X-Requested-With': 'BukuUtang' }
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null);
+      throw new ApiError(
+        payload?.error || 'Gagal mengunduh file arsip Excel.',
+        res.status
+      );
+    }
+    const blob = await res.blob();
+    const disposition = res.headers.get('content-disposition') || '';
+    const match = disposition.match(/filename="([^"]+)"/);
+    const filename = match ? match[1] : `bukuutang-arsip-${new Date().toISOString().slice(0, 10)}.csv`;
+
+    const blobUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(blobUrl);
+    return filename;
+  },
+
+  adminPurgeArchive: (months = 3, includeUnpaid = false) =>
+    request<{ ok: boolean; deletedCount: number }>('/api/admin/archive/purge', {
+      method: 'POST',
+      body: JSON.stringify({ months, includeUnpaid })
     })
 };
 
