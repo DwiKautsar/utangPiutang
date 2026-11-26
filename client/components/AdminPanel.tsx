@@ -560,15 +560,21 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
             </div>
           ) : (
             <ul class="ledger-list">
-              {users.map((u) => {
-                const isSelf = u.id === currentUser.id;
-                return (
-                  <li class="ledger-item" key={u.id}>
-                    <div class="ledger-item-top">
-                      <div class="ledger-counterparty">
-                        <span class="ledger-code tabular-num">
-                          ID #{u.id} {isSelf ? '(Akun Anda)' : ''}
-                        </span>
+              {(() => {
+                let memberOrder = 0;
+                return users.map((u) => {
+                  const isSelf = u.id === currentUser.id;
+                  const isAdmin = u.role === 'admin';
+                  const displayCode = isAdmin
+                    ? 'SUPERADMIN'
+                    : `#${String(++memberOrder).padStart(3, '0')}`;
+                  return (
+                    <li class="ledger-item" key={u.id}>
+                      <div class="ledger-item-top">
+                        <div class="ledger-counterparty">
+                          <span class="ledger-code tabular-num">
+                            {displayCode} {isSelf ? '(Akun Anda)' : ''}
+                          </span>
                         <span class="ledger-name">
                           {u.displayName} <span class="user-handle">@{u.username}</span>
                         </span>
@@ -621,9 +627,10 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         </button>
                       )}
                     </div>
-                  </li>
-                );
-              })}
+                    </li>
+                  );
+                });
+              })()}
             </ul>
           )
         ) : debts.length === 0 ? (
