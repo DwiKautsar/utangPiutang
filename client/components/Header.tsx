@@ -3,8 +3,6 @@ import type { UserProfile } from '../api';
 interface HeaderProps {
   user: UserProfile;
   theme: 'light' | 'dark';
-  activeView: 'personal' | 'admin';
-  onChangeView: (view: 'personal' | 'admin') => void;
   onToggleTheme: () => void;
   onLogout: () => void;
   loggingOut: boolean;
@@ -20,8 +18,6 @@ function getInitials(name: string): string {
 export function Header({
   user,
   theme,
-  activeView,
-  onChangeView,
   onToggleTheme,
   onLogout,
   loggingOut
@@ -32,31 +28,12 @@ export function Header({
         <a href="#ringkasan" class="brand-wordmark">
           BukuUtang
         </a>
-        <span class="brand-edition">Catatan kas terhubung</span>
+        <span class="brand-edition">
+          {user.role === 'admin' ? 'Dashboard Pengelolaan Admin' : 'Catatan kas terhubung'}
+        </span>
       </div>
 
       <nav class="header-controls" aria-label="Kontrol akun dan tampilan">
-        {user.role === 'admin' && (
-          <div class="view-switcher" role="group" aria-label="Pindah tampilan">
-            <button
-              type="button"
-              class={`btn btn-sm ${activeView === 'personal' ? 'btn-primary' : 'btn-ghost'}`}
-              aria-current={activeView === 'personal' ? 'page' : undefined}
-              onClick={() => onChangeView('personal')}
-            >
-              Buku Saya
-            </button>
-            <button
-              type="button"
-              class={`btn btn-sm ${activeView === 'admin' ? 'btn-primary' : 'btn-ghost'}`}
-              aria-current={activeView === 'admin' ? 'page' : undefined}
-              onClick={() => onChangeView('admin')}
-            >
-              Panel Admin
-            </button>
-          </div>
-        )}
-
         <div class="user-chip" aria-label={`Masuk sebagai ${user.displayName}`}>
           <span class="user-initials" aria-hidden="true">
             {getInitials(user.displayName)}

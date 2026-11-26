@@ -52,6 +52,215 @@ function mapDebtRow(row: Row): DebtRecord {
 export function createAdminRoutes(db: Client) {
   const router = new Hono<AuthEnv>();
 
+  // Single-roundtrip bootstrap for Admin Dashboard (overview, users, debts, archive preview, charts)
+  router.get('/bootstrap', async (c) => {
+    const statusFilter = c.req.query('status') || 'all';
+    if (!VALID_FILTERS.has(statusFilter)) {
+      return c.json({ error: 'Parameter status tidak valid.' }, 400);
+    }
+
+    const months = parseArchiveMonths(c.req.query('months'));
+    const includeUnpaid = c.req.query('includeUnpaid') === '1';
+    const archiveStatusClause = includeUnpaid ? '' : "AND status IN ('paid', 'cancelled')";
+
+    let whereClause = '';
+    const debtArgs: Array<string | number> = [];
+    if (statusFilter === 'active') {
+      whereClause = "WHERE d.status IN ('unpaid', 'pending_confirmation')";
+    } else if (statusFilter !== 'all') {
+      whereClause = 'WHERE d.status = ?';
+      debtArgs.push(statusFilter);
+    }
+
+    const [
+      userStats,
+      debtStats,
+      usersRes,
+      debtsRes,
+      archivePrevRes,
+      monthlyRes,
+      statusBreakdownRes,
+      topDebtorsRes
+    ] = await db.batch(
+      [
+        `SELECT
+          COUNT(*) AS total_users,
+          COALESCE(SUM(CASE WHEN role = 'admin' THEN 1 ELSE 0 END), 0) AS total_admins
+        FROM users`,
+        `SELECT
+          COALESCE(SUM(CASE WHEN status IN ('unpaid', 'pending_confirmation') THEN 1 ELSE 0 END), 0) AS active_count,
+          COALESCE(SUM(CASE WHEN status IN ('unpaid', 'pending_confirmation') THEN amount_idr ELSE 0 END), 0) AS active_amount_idr,
+          COALESCE(SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END), 0) AS paid_count,
+          COALESCE(SUM(CASE WHEN status = 'paid' THEN amount_idr ELSE 0 END), 0) AS paid_amount_idr
+        FROM debts`,
+        `SELECT
+          u.id,
+          u.username,
+          u.display_name,
+          u.role,
+          u.created_at,
+          (SELECT COUNT(*) FROM debts d WHERE d.creditor_id = u.id AND d.status IN ('unpaid', 'pending_confirmation')) AS active_receivable_count,
+          (SELECT COUNT(*) FROM debts d WHERE d.debtor_id = u.id AND d.status IN ('unpaid', 'pending_confirmation')) AS active_payable_count
+        FROM users u
+        ORDER BY CASE u.role WHEN 'admin' THEN 0 ELSE 1 END, u.created_at ASC
+        LIMIT 300`,
+        {
+          sql: `WITH numbered_debts AS (
+            SELECT d.*, ROW_NUMBER() OVER (ORDER BY d.created_at ASC, d.id ASC) AS display_number
+            FROM debts d
+          )
+          SELECT
+            d.id,
+            d.display_number,
+            d.creditor_id,
+            c.username AS creditor_username,
+            c.display_name AS creditor_name,
+            d.creditor_manual_name,
+            d.debtor_id,
+            b.username AS debtor_username,
+            b.display_name AS debtor_name,
+            d.debtor_manual_name,
+            d.amount_idr,
+            d.description,
+            d.due_date,
+            d.status,
+            d.payment_note,
+            d.paid_at,
+            d.created_at,
+            d.updated_at
+          FROM numbered_debts d
+          LEFT JOIN users c ON c.id = d.creditor_id
+          LEFT JOIN users b ON b.id = d.debtor_id
+          ${whereClause}
+          ORDER BY d.created_at DESC, d.id DESC
+          LIMIT 300`,
+          args: debtArgs
+        },
+        {
+          sql: `SELECT
+                  COUNT(*) AS total_count,
+                  COALESCE(SUM(amount_idr), 0) AS total_amount
+                FROM debts
+                WHERE created_at <= datetime('now', ?) ${archiveStatusClause}`,
+          args: [`-${months} months`]
+        },
+        `SELECT
+          strftime('%Y-%m', created_at) AS month_key,
+          COALESCE(SUM(amount_idr), 0) AS recorded_idr,
+          COALESCE(SUM(CASE WHEN status = 'paid' THEN amount_idr ELSE 0 END), 0) AS paid_idr,
+          COUNT(*) AS tx_count
+        FROM debts
+        WHERE created_at >= datetime('now', '-5 months', 'start of month')
+        GROUP BY month_key
+        ORDER BY month_key ASC`,
+        `SELECT
+          status,
+          COUNT(*) AS tx_count,
+          COALESCE(SUM(amount_idr), 0) AS total_idr
+        FROM debts
+        GROUP BY status`,
+        `SELECT
+          COALESCE(b.display_name, d.debtor_manual_name, 'Peminjam') AS debtor_label,
+          b.username AS debtor_username,
+          COUNT(*) AS active_count,
+          COALESCE(SUM(d.amount_idr), 0) AS active_idr
+        FROM debts d
+        LEFT JOIN users b ON b.id = d.debtor_id
+        WHERE d.status IN ('unpaid', 'pending_confirmation')
+        GROUP BY COALESCE(CAST(d.debtor_id AS TEXT), 'manual:' || LOWER(COALESCE(d.debtor_manual_name, '')))
+        ORDER BY active_idr DESC
+        LIMIT 5`
+      ],
+      'read'
+    );
+
+    const u = userStats.rows[0];
+    const d = debtStats.rows[0];
+    const prev = archivePrevRes.rows[0];
+
+    // Fill all 6 trailing months so the trend chart always has a continuous time axis
+    const monthlyMap = new Map<string, { recordedIdr: number; paidIdr: number; count: number }>();
+    for (const row of monthlyRes.rows) {
+      monthlyMap.set(String(row.month_key), {
+        recordedIdr: Number(row.recorded_idr ?? 0),
+        paidIdr: Number(row.paid_idr ?? 0),
+        count: Number(row.tx_count ?? 0)
+      });
+    }
+
+    const now = new Date();
+    const monthlyTrend: Array<{
+      monthKey: string;
+      recordedIdr: number;
+      paidIdr: number;
+      count: number;
+    }> = [];
+    for (let offset = 5; offset >= 0; offset -= 1) {
+      const dt = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - offset, 1));
+      const key = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}`;
+      const found = monthlyMap.get(key);
+      monthlyTrend.push({
+        monthKey: key,
+        recordedIdr: found?.recordedIdr ?? 0,
+        paidIdr: found?.paidIdr ?? 0,
+        count: found?.count ?? 0
+      });
+    }
+
+    const statusBreakdown: Record<DebtStatus, { count: number; totalIdr: number }> = {
+      unpaid: { count: 0, totalIdr: 0 },
+      pending_confirmation: { count: 0, totalIdr: 0 },
+      paid: { count: 0, totalIdr: 0 },
+      cancelled: { count: 0, totalIdr: 0 }
+    };
+    for (const row of statusBreakdownRes.rows) {
+      const st = String(row.status) as DebtStatus;
+      if (st in statusBreakdown) {
+        statusBreakdown[st] = {
+          count: Number(row.tx_count ?? 0),
+          totalIdr: Number(row.total_idr ?? 0)
+        };
+      }
+    }
+
+    return c.json({
+      overview: {
+        totalUsers: Number(u?.total_users ?? 0),
+        totalAdmins: Number(u?.total_admins ?? 0),
+        activeDebtCount: Number(d?.active_count ?? 0),
+        activeDebtAmountIdr: Number(d?.active_amount_idr ?? 0),
+        paidDebtCount: Number(d?.paid_count ?? 0),
+        paidDebtAmountIdr: Number(d?.paid_amount_idr ?? 0)
+      },
+      archivePreview: {
+        months,
+        includeUnpaid,
+        count: Number(prev?.total_count ?? 0),
+        totalAmountIdr: Number(prev?.total_amount ?? 0)
+      },
+      analytics: {
+        monthlyTrend,
+        statusBreakdown,
+        topActiveDebtors: topDebtorsRes.rows.map((row) => ({
+          name: String(row.debtor_label),
+          username: row.debtor_username === null ? null : String(row.debtor_username),
+          activeCount: Number(row.active_count ?? 0),
+          activeIdr: Number(row.active_idr ?? 0)
+        }))
+      },
+      users: usersRes.rows.map((row) => ({
+        id: Number(row.id),
+        username: String(row.username),
+        displayName: String(row.display_name),
+        role: (String(row.role) === 'admin' ? 'admin' : 'user') as UserRole,
+        createdAt: String(row.created_at),
+        activeReceivableCount: Number(row.active_receivable_count ?? 0),
+        activePayableCount: Number(row.active_payable_count ?? 0)
+      })),
+      items: debtsRes.rows.map(mapDebtRow)
+    });
+  });
+
   router.get('/overview', async (c) => {
     const [userStats, debtStats] = await db.batch(
       [

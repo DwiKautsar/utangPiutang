@@ -466,6 +466,30 @@ test('Arsip Excel 3 bulanan, proteksi CSV formula injection, dan penomoran ulang
       remaining.map((i) => i.displayNumber).sort((a, b) => a - b),
       [1, 2]
     );
+
+    // Uji single-roundtrip /api/admin/bootstrap (overview + analytics 6 bulan + top debtors)
+    const adminBootRes = await jsonRequest(app, '/api/admin/bootstrap?status=all&months=3&includeUnpaid=0', {
+      cookie: adminCookie
+    });
+    assert.equal(adminBootRes.status, 200);
+    const adminBoot = (await adminBootRes.json()) as {
+      analytics: {
+        monthlyTrend: Array<{ monthKey: string }>;
+        statusBreakdown: { unpaid: { count: number } };
+        topActiveDebtors: Array<{ name: string; activeIdr: number }>;
+      };
+      items: unknown[];
+    };
+    assert.equal(adminBoot.analytics.monthlyTrend.length, 6);
+    assert.equal(adminBoot.analytics.statusBreakdown.unpaid.count, 2);
+    assert.equal(adminBoot.analytics.topActiveDebtors[0].activeIdr, 50000);
+    assert.equal(adminBoot.items.length, 2);
+
+    // Uji /api/bootstrap untuk sesi admin (mengembalikan user tanpa beban query personal)
+    const bootRes = await jsonRequest(app, '/api/bootstrap', { cookie: adminCookie });
+    assert.equal(bootRes.status, 200);
+    const bootData = (await bootRes.json()) as { user: { role: string } };
+    assert.equal(bootData.user.role, 'admin');
   } finally {
     db.close();
   }

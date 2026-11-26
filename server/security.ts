@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import type { Context, Next } from 'hono';
 
 export const SESSION_COOKIE_NAME = 'bukuutang_sid';
-export const SESSION_TTL_DAYS = 7;
+export const SESSION_TTL_DAYS = 30;
 
 export function hashPassword(password: string): string {
   const salt = crypto.randomBytes(16).toString('hex');

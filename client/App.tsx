@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useState } from 'preact/hooks';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import {
   api,
   ApiError,
@@ -21,6 +21,8 @@ const EMPTY_SUMMARY: DebtSummary = {
   activeBillCount: 0
 };
 
+const USER_CACHE_KEY = 'bukuutang_cached_user';
+
 function readInitialTheme(): 'light' | 'dark' {
   try {
     const saved = window.localStorage.getItem('bukuutang_theme');
@@ -31,12 +33,39 @@ function readInitialTheme(): 'light' | 'dark' {
   return 'dark';
 }
 
+// Cache non-sensitive UI profile in sessionStorage so refreshes render the shell immediately
+function readCachedUser(): UserProfile | null {
+  try {
+    const raw = window.sessionStorage.getItem(USER_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as UserProfile;
+    if (parsed && typeof parsed.id === 'number' && typeof parsed.username === 'string') {
+      return parsed;
+    }
+  } catch {
+    // Ignore malformed cache
+  }
+  return null;
+}
+
+function writeCachedUser(user: UserProfile | null) {
+  try {
+    if (user) {
+      window.sessionStorage.setItem(USER_CACHE_KEY, JSON.stringify(user));
+    } else {
+      window.sessionStorage.removeItem(USER_CACHE_KEY);
+    }
+  } catch {
+    // Ignore storage write errors
+  }
+}
+
 export function App() {
+  const initialCachedUser = readCachedUser();
   const [theme, setTheme] = useState<'light' | 'dark'>(readInitialTheme);
-  const [user, setUser] = useState<UserProfile | null>(null);
-  const [checkingSession, setCheckingSession] = useState(true);
+  const [user, setUser] = useState<UserProfile | null>(initialCachedUser);
+  const [checkingSession, setCheckingSession] = useState(initialCachedUser === null);
   const [loggingOut, setLoggingOut] = useState(false);
-  const [activeView, setActiveView] = useState<'personal' | 'admin'>('personal');
 
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
@@ -47,6 +76,8 @@ export function App() {
   const [items, setItems] = useState<DebtItem[]>([]);
   const [loadingDebts, setLoadingDebts] = useState(false);
   const [debtsError, setDebtsError] = useState<string | null>(null);
+
+  const bootstrappedRef = useRef(false);
 
   useLayoutEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -60,12 +91,23 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     api
-      .getMe()
+      .getBootstrap()
       .then((res) => {
-        if (!cancelled) setUser(res.user);
+        if (cancelled) return;
+        setUser(res.user);
+        writeCachedUser(res.user);
+        if (res.user && res.user.role !== 'admin') {
+          bootstrappedRef.current = true;
+          if (res.users) setUsers(res.users);
+          if (res.summary) setSummary(res.summary);
+          if (res.items) setItems(res.items);
+        }
       })
       .catch(() => {
-        if (!cancelled) setUser(null);
+        if (!cancelled) {
+          setUser(null);
+          writeCachedUser(null);
+        }
       })
       .finally(() => {
         if (!cancelled) setCheckingSession(false);
@@ -98,6 +140,7 @@ export function App() {
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         setUser(null);
+        writeCachedUser(null);
         return;
       }
       setDebtsError(
@@ -109,14 +152,19 @@ export function App() {
   }, [role, statusFilter]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || user.role === 'admin') return;
+    if (bootstrappedRef.current) return;
     loadUsers();
   }, [user, loadUsers]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || user.role === 'admin') return;
+    if (bootstrappedRef.current && role === 'debtor' && statusFilter === 'all') {
+      bootstrappedRef.current = false;
+      return;
+    }
     loadDebts();
-  }, [user, loadDebts]);
+  }, [user, role, statusFilter, loadDebts]);
 
   async function handleLogout() {
     setLoggingOut(true);
@@ -124,7 +172,7 @@ export function App() {
       await api.logout();
     } finally {
       setUser(null);
-      setActiveView('personal');
+      writeCachedUser(null);
       setItems([]);
       setSummary(EMPTY_SUMMARY);
       setLoggingOut(false);
@@ -152,8 +200,9 @@ export function App() {
         theme={theme}
         onToggleTheme={toggleTheme}
         onAuthenticated={(loggedUser) => {
+          bootstrappedRef.current = false;
           setUser(loggedUser);
-          setActiveView('personal');
+          writeCachedUser(loggedUser);
           setRole('debtor');
           setStatusFilter('all');
         }}
@@ -166,21 +215,14 @@ export function App() {
       <Header
         user={user}
         theme={theme}
-        activeView={activeView}
-        onChangeView={(nextView) => setActiveView(nextView)}
         onToggleTheme={toggleTheme}
         onLogout={handleLogout}
         loggingOut={loggingOut}
       />
 
       <main>
-        {user.role === 'admin' && activeView === 'admin' ? (
-          <AdminPanel
-            currentUser={user}
-            onDataChanged={async () => {
-              await Promise.all([loadUsers(), loadDebts()]);
-            }}
-          />
+        {user.role === 'admin' ? (
+          <AdminPanel currentUser={user} />
         ) : (
           <div class="dashboard-main">
             <SummaryStrip summary={summary} />

@@ -23,6 +23,42 @@ export interface AdminOverview {
   activeDebtCount: number;
   activeDebtAmountIdr: number;
   paidDebtCount: number;
+  paidDebtAmountIdr?: number;
+}
+
+export interface MonthlyTrendPoint {
+  monthKey: string;
+  recordedIdr: number;
+  paidIdr: number;
+  count: number;
+}
+
+export interface TopActiveDebtor {
+  name: string;
+  username: string | null;
+  activeCount: number;
+  activeIdr: number;
+}
+
+export interface AdminAnalytics {
+  monthlyTrend: MonthlyTrendPoint[];
+  statusBreakdown: Record<DebtStatus, { count: number; totalIdr: number }>;
+  topActiveDebtors: TopActiveDebtor[];
+}
+
+export interface AdminBootstrapResponse {
+  overview: AdminOverview;
+  archivePreview: ArchivePreview;
+  analytics: AdminAnalytics;
+  users: AdminUserItem[];
+  items: DebtItem[];
+}
+
+export interface UserBootstrapResponse {
+  user: UserProfile | null;
+  users?: UserProfile[];
+  summary?: DebtSummary;
+  items?: DebtItem[];
 }
 
 export interface ArchivePreview {
@@ -112,6 +148,8 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
 export const api = {
   getMe: () => request<{ user: UserProfile | null }>('/api/auth/me'),
 
+  getBootstrap: () => request<UserBootstrapResponse>('/api/bootstrap'),
+
   register: (input: { username: string; displayName: string; password: string }) =>
     request<{ user: UserProfile }>('/api/auth/register', {
       method: 'POST',
@@ -166,6 +204,11 @@ export const api = {
     request<{ ok: boolean; status: DebtStatus }>(`/api/debts/${id}/cancel`, {
       method: 'PATCH'
     }),
+
+  adminBootstrap: (status = 'all', months = 3, includeUnpaid = false) =>
+    request<AdminBootstrapResponse>(
+      `/api/admin/bootstrap?status=${encodeURIComponent(status)}&months=${months}&includeUnpaid=${includeUnpaid ? '1' : '0'}`
+    ),
 
   adminOverview: () => request<{ overview: AdminOverview }>('/api/admin/overview'),
 

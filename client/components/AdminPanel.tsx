@@ -4,6 +4,7 @@ import {
   ApiError,
   formatDateId,
   formatRupiah,
+  type AdminAnalytics,
   type AdminOverview,
   type AdminUserItem,
   type ArchivePreview,
@@ -15,7 +16,6 @@ import { ConfirmDialog } from './ConfirmDialog';
 
 interface AdminPanelProps {
   currentUser: UserProfile;
-  onDataChanged: () => Promise<void>;
 }
 
 const STATUS_LABELS: Record<DebtStatus, string> = {
@@ -25,15 +25,46 @@ const STATUS_LABELS: Record<DebtStatus, string> = {
   cancelled: 'Dibatalkan'
 };
 
+const MONTH_SHORT_ID = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'Mei',
+  'Jun',
+  'Jul',
+  'Agu',
+  'Sep',
+  'Okt',
+  'Nov',
+  'Des'
+];
+
+function formatMonthLabel(monthKey: string): string {
+  const parts = monthKey.split('-');
+  if (parts.length !== 2) return monthKey;
+  const monthIdx = Number(parts[1]) - 1;
+  const shortMonth = MONTH_SHORT_ID[monthIdx] ?? parts[1];
+  return `${shortMonth} ${parts[0].slice(2)}`;
+}
+
+function formatCompactIdr(amount: number): string {
+  if (amount >= 1_000_000_000) return `${(amount / 1_000_000_000).toFixed(1)}M`;
+  if (amount >= 1_000_000) return `${(amount / 1_000_000).toFixed(1)}jt`;
+  if (amount >= 1_000) return `${Math.round(amount / 1_000)}rb`;
+  return String(amount);
+}
+
 type AdminDialogAction =
   | { type: 'reset-password'; target: AdminUserItem }
   | { type: 'delete-user'; target: AdminUserItem }
   | { type: 'delete-debt'; target: DebtItem }
   | { type: 'archive-purge' };
 
-export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
+export function AdminPanel({ currentUser }: AdminPanelProps) {
   const [tab, setTab] = useState<'users' | 'debts'>('users');
   const [overview, setOverview] = useState<AdminOverview | null>(null);
+  const [analytics, setAnalytics] = useState<AdminAnalytics | null>(null);
   const [archivePreview, setArchivePreview] = useState<ArchivePreview | null>(null);
   const [includeUnpaidArchive, setIncludeUnpaidArchive] = useState(false);
   const [users, setUsers] = useState<AdminUserItem[]>([]);
@@ -53,18 +84,14 @@ export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
     setLoading(true);
     setError(null);
     try {
-      const [ovRes, usersRes, debtsRes, prevRes] = await Promise.all([
-        api.adminOverview(),
-        api.adminListUsers(),
-        api.adminListDebts(debtFilter),
-        api.adminArchivePreview(3, includeUnpaidArchive)
-      ]);
-      setOverview(ovRes.overview);
-      setUsers(usersRes.users);
-      setDebts(debtsRes.items);
-      setArchivePreview(prevRes.preview);
+      const data = await api.adminBootstrap(debtFilter, 3, includeUnpaidArchive);
+      setOverview(data.overview);
+      setAnalytics(data.analytics);
+      setArchivePreview(data.archivePreview);
+      setUsers(data.users);
+      setDebts(data.items);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Gagal memuat data panel admin.');
+      setError(err instanceof ApiError ? err.message : 'Gagal memuat data dashboard admin.');
     } finally {
       setLoading(false);
     }
@@ -97,9 +124,10 @@ export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
     setError(null);
     try {
       await api.adminUpdateDebtStatus(item.id, nextStatus);
-      setFeedback(`Status transaksi #${String(item.displayNumber).padStart(3, '0')} diubah ke ${STATUS_LABELS[nextStatus]}.`);
+      setFeedback(
+        `Status transaksi #${String(item.displayNumber).padStart(3, '0')} diubah ke ${STATUS_LABELS[nextStatus]}.`
+      );
       await loadAll();
-      await onDataChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Gagal memperbarui status transaksi.');
     } finally {
@@ -134,13 +162,17 @@ export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
     try {
       if (dialog.type === 'reset-password') {
         await api.adminResetPassword(dialog.target.id, newPassword);
-        setFeedback(`Password akun @${dialog.target.username} telah direset dan sesi lamanya dikeluarkan.`);
+        setFeedback(
+          `Password akun @${dialog.target.username} telah direset dan sesi lamanya dikeluarkan.`
+        );
       } else if (dialog.type === 'delete-user') {
         await api.adminDeleteUser(dialog.target.id);
         setFeedback(`Akun @${dialog.target.username} beserta catatan terkait telah dihapus.`);
       } else if (dialog.type === 'delete-debt') {
         await api.adminDeleteDebt(dialog.target.id);
-        setFeedback(`Catatan transaksi #${String(dialog.target.displayNumber).padStart(3, '0')} dihapus dan nomor urut otomatis dirapikan.`);
+        setFeedback(
+          `Catatan transaksi #${String(dialog.target.displayNumber).padStart(3, '0')} dihapus dan nomor urut otomatis dirapikan.`
+        );
       } else if (dialog.type === 'archive-purge') {
         const filename = await api.adminDownloadArchiveCsv({
           scope: 'archive',
@@ -155,13 +187,33 @@ export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
       setDialog(null);
       setNewPassword('');
       await loadAll();
-      await onDataChanged();
     } catch (err) {
       setDialogError(err instanceof ApiError ? err.message : 'Aksi gagal diproses.');
     } finally {
       setBusyId(null);
     }
   }
+
+  const paidAmount = overview?.paidDebtAmountIdr ?? 0;
+  const activeAmount = overview?.activeDebtAmountIdr ?? 0;
+  const totalVolume = paidAmount + activeAmount;
+  const settlementRate = totalVolume > 0 ? Math.round((paidAmount / totalVolume) * 100) : 0;
+
+  const trend = analytics?.monthlyTrend ?? [];
+  const maxTrendVal = Math.max(
+    1,
+    ...trend.map((p) => Math.max(p.recordedIdr, p.paidIdr))
+  );
+
+  const breakdown = analytics?.statusBreakdown;
+  const totalTxBreakdown = breakdown
+    ? breakdown.unpaid.count +
+      breakdown.pending_confirmation.count +
+      breakdown.paid.count +
+      breakdown.cancelled.count
+    : 0;
+
+  const topDebtors = analytics?.topActiveDebtors ?? [];
 
   return (
     <div class="dashboard-main">
@@ -170,31 +222,211 @@ export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
           <h1 id="admin-summary-heading" class="summary-label">
             Total Nominal Utang Aktif (Seluruh Akun)
           </h1>
-          <p class="summary-net-amount tabular-num">
-            {formatRupiah(overview?.activeDebtAmountIdr ?? 0)}
-          </p>
+          <p class="summary-net-amount tabular-num">{formatRupiah(activeAmount)}</p>
           <p class="metric-sub">
-            {overview?.activeDebtCount ?? 0} catatan aktif dan {overview?.paidDebtCount ?? 0} catatan lunas
+            {overview?.activeDebtCount ?? 0} transaksi aktif, {overview?.paidDebtCount ?? 0} lunas
+            ({settlementRate}% rasio pelunasan)
           </p>
         </div>
 
-        <div class="summary-metrics">
+        <div class="summary-metrics admin-kpi-grid">
           <div class="metric-block">
             <span class="summary-label">Total Akun Terdaftar</span>
             <span class="metric-value tabular-num">{overview?.totalUsers ?? 0}</span>
-            <span class="metric-sub">{overview?.totalAdmins ?? 0} akun memiliki akses admin</span>
+            <span class="metric-sub">{overview?.totalAdmins ?? 0} akun admin</span>
           </div>
 
           <div class="metric-block">
-            <span class="summary-label">Arsip Berkala (&gt; 3 Bulan)</span>
-            <span class="metric-value tabular-num">{archivePreview?.count ?? 0} catatan</span>
+            <span class="summary-label">Total Nominal Lunas</span>
+            <span class="metric-value tabular-num">{formatRupiah(paidAmount)}</span>
+            <span class="metric-sub">Tercatat sudah diselesaikan</span>
+          </div>
+
+          <div class="metric-block">
+            <span class="summary-label">Arsip (&gt; 3 Bulan)</span>
+            <span class="metric-value tabular-num">{archivePreview?.count ?? 0} data</span>
             <span class="metric-sub">
               {archivePreview && archivePreview.count > 0
-                ? `Total ${formatRupiah(archivePreview.totalAmountIdr)} siap diarsipkan ke Excel`
-                : 'Belum ada catatan lebih dari 3 bulan untuk diarsipkan'}
+                ? formatRupiah(archivePreview.totalAmountIdr)
+                : 'Belum ada data lama'}
             </span>
           </div>
         </div>
+      </section>
+
+      <section class="analytics-grid" aria-label="Grafik dan ringkasan analitik">
+        <article class="panel" aria-labelledby="trend-chart-heading">
+          <div class="panel-heading">
+            <div>
+              <h2 id="trend-chart-heading">Tren 6 Bulan Terakhir</h2>
+              <p>Perbandingan nominal transaksi tercatat dan yang sudah lunas per bulan.</p>
+            </div>
+            <div class="chart-legend" aria-label="Legenda grafik">
+              <span class="legend-item">
+                <span class="legend-swatch is-recorded" aria-hidden="true" />
+                Tercatat
+              </span>
+              <span class="legend-item">
+                <span class="legend-swatch is-paid" aria-hidden="true" />
+                Lunas
+              </span>
+            </div>
+          </div>
+
+          {loading && trend.length === 0 ? (
+            <div class="state-box" role="status">
+              <p>Memuat grafik tren...</p>
+            </div>
+          ) : trend.every((p) => p.recordedIdr === 0 && p.paidIdr === 0) ? (
+            <div class="state-box">
+              <h3>Belum ada riwayat 6 bulan terakhir</h3>
+              <p>Grafik batang akan terisi otomatis begitu pengguna mulai mencatat transaksi.</p>
+            </div>
+          ) : (
+            <div class="chart-wrap">
+              <svg
+                class="trend-svg"
+                viewBox="0 0 540 210"
+                role="img"
+                aria-label="Grafik batang perbandingan nominal tercatat dan lunas selama 6 bulan terakhir"
+              >
+                {[0, 0.5, 1].map((ratio) => {
+                  const y = 165 - ratio * 135;
+                  return (
+                    <g key={ratio}>
+                      <line x1="48" y1={y} x2="528" y2={y} class="chart-grid-line" />
+                      <text x="42" y={y + 4} text-anchor="end" class="chart-axis-text tabular-num">
+                        {formatCompactIdr(Math.round(maxTrendVal * ratio))}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                {trend.map((point, idx) => {
+                  const groupX = 64 + idx * 76;
+                  const recHeight = Math.max(
+                    point.recordedIdr > 0 ? 4 : 0,
+                    Math.round((point.recordedIdr / maxTrendVal) * 135)
+                  );
+                  const paidHeight = Math.max(
+                    point.paidIdr > 0 ? 4 : 0,
+                    Math.round((point.paidIdr / maxTrendVal) * 135)
+                  );
+
+                  return (
+                    <g key={point.monthKey}>
+                      <rect
+                        x={groupX}
+                        y={165 - recHeight}
+                        width="22"
+                        height={recHeight}
+                        rx="3"
+                        class="chart-bar-recorded"
+                      >
+                        <title>
+                          {formatMonthLabel(point.monthKey)} Tercatat: {formatRupiah(point.recordedIdr)} ({point.count} catatan)
+                        </title>
+                      </rect>
+                      <rect
+                        x={groupX + 26}
+                        y={165 - paidHeight}
+                        width="22"
+                        height={paidHeight}
+                        rx="3"
+                        class="chart-bar-paid"
+                      >
+                        <title>
+                          {formatMonthLabel(point.monthKey)} Lunas: {formatRupiah(point.paidIdr)}
+                        </title>
+                      </rect>
+                      <text x={groupX + 24} y="188" text-anchor="middle" class="chart-axis-text">
+                        {formatMonthLabel(point.monthKey)}
+                      </text>
+                    </g>
+                  );
+                })}
+              </svg>
+            </div>
+          )}
+        </article>
+
+        <article class="panel" aria-labelledby="breakdown-heading">
+          <div class="panel-heading">
+            <div>
+              <h2 id="breakdown-heading">Distribusi Status &amp; Tagihan Aktif</h2>
+              <p>Proporsi seluruh catatan dan daftar peminjam dengan tanggungan terbesar.</p>
+            </div>
+          </div>
+
+          {totalTxBreakdown === 0 || !breakdown ? (
+            <div class="state-box">
+              <h3>Belum ada catatan transaksi</h3>
+              <p>Distribusi status akan tampil setelah ada transaksi di buku kas.</p>
+            </div>
+          ) : (
+            <div class="breakdown-stack">
+              <div class="segmented-bar" aria-label="Proporsi status transaksi">
+                {(['unpaid', 'pending_confirmation', 'paid', 'cancelled'] as DebtStatus[]).map(
+                  (st) => {
+                    const count = breakdown[st].count;
+                    if (count === 0) return null;
+                    const pct = (count / totalTxBreakdown) * 100;
+                    return (
+                      <span
+                        key={st}
+                        class={`seg-piece seg-${st}`}
+                        style={{ width: `${pct}%` }}
+                        title={`${STATUS_LABELS[st]}: ${count} (${Math.round(pct)}%)`}
+                      />
+                    );
+                  }
+                )}
+              </div>
+
+              <ul class="breakdown-list">
+                {(['unpaid', 'pending_confirmation', 'paid', 'cancelled'] as DebtStatus[]).map(
+                  (st) => {
+                    const stat = breakdown[st];
+                    const pct = totalTxBreakdown > 0 ? Math.round((stat.count / totalTxBreakdown) * 100) : 0;
+                    return (
+                      <li key={st} class="breakdown-row">
+                        <span class="breakdown-label">
+                          <span class={`legend-swatch seg-${st}`} aria-hidden="true" />
+                          <span>{STATUS_LABELS[st]}</span>
+                        </span>
+                        <span class="breakdown-values tabular-num">
+                          <strong>{stat.count}</strong> ({pct}%) | {formatRupiah(stat.totalIdr)}
+                        </span>
+                      </li>
+                    );
+                  }
+                )}
+              </ul>
+            </div>
+          )}
+
+          <div class="top-debtors-block">
+            <h3 class="sub-heading">Tanggungan Aktif Tertinggi</h3>
+            {topDebtors.length === 0 ? (
+              <p class="metric-sub">Tidak ada tagihan aktif saat ini.</p>
+            ) : (
+              <ol class="top-debtors-list">
+                {topDebtors.map((d, idx) => (
+                  <li key={`${d.name}-${idx}`} class="top-debtor-row">
+                    <span class="top-debtor-name">
+                      <span class="ledger-code tabular-num">{idx + 1}.</span> {d.name}
+                      {d.username ? <span class="user-handle"> @{d.username}</span> : ' (Manual)'}
+                    </span>
+                    <span class="tabular-num">
+                      <strong>{formatRupiah(d.activeIdr)}</strong>{' '}
+                      <span class="user-handle">({d.activeCount})</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+        </article>
       </section>
 
       <section class="panel archive-bar" aria-labelledby="archive-heading">
@@ -211,7 +443,10 @@ export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
               checked={includeUnpaidArchive}
               onChange={(e) => setIncludeUnpaidArchive((e.target as HTMLInputElement).checked)}
             />
-            <span>Sertakan juga catatan &gt; 3 bulan yang masih belum lunas (default: hanya Lunas/Dibatalkan)</span>
+            <span>
+              Sertakan juga catatan &gt; 3 bulan yang masih belum lunas (default: hanya
+              Lunas/Dibatalkan)
+            </span>
           </label>
         </div>
 
@@ -241,7 +476,7 @@ export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
       <section class="panel" aria-labelledby="admin-panel-heading">
         <div class="panel-heading">
           <div>
-            <h2 id="admin-panel-heading">Panel Pengelolaan Admin</h2>
+            <h2 id="admin-panel-heading">Pengelolaan Akun &amp; Catatan</h2>
             <p>Pantau seluruh akun pengguna dan koreksi status catatan utang piutang.</p>
           </div>
         </div>
@@ -312,7 +547,7 @@ export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
           </div>
         </div>
 
-        {loading ? (
+        {loading && users.length === 0 && debts.length === 0 ? (
           <div class="state-box" role="status">
             <h3>Memuat data admin...</h3>
             <p>Mengambil daftar akun dan transaksi dari database.</p>
@@ -344,7 +579,9 @@ export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
                         </div>
                       </div>
 
-                      <span class={`status-badge ${u.role === 'admin' ? 'status-paid' : 'status-cancelled'}`}>
+                      <span
+                        class={`status-badge ${u.role === 'admin' ? 'status-paid' : 'status-cancelled'}`}
+                      >
                         {u.role === 'admin' ? 'Admin' : 'User'}
                       </span>
                     </div>
@@ -432,7 +669,7 @@ export function AdminPanel({ currentUser, onDataChanged }: AdminPanelProps) {
 
                 <div class="ledger-actions">
                   <label class="sr-only" for={`admin-debt-status-${item.id}`}>
-                    Ubah status transaksi #{item.id}
+                    Ubah status transaksi #{item.displayNumber}
                   </label>
                   <select
                     id={`admin-debt-status-${item.id}`}
